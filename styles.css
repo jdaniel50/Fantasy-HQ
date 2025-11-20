@@ -1,4 +1,3 @@
-/* styles.css */
 :root {
   --bg-main: #05060a;
   --bg-elevated: #11131a;
@@ -46,7 +45,7 @@ body {
   gap: 16px;
 }
 
-/* HEADER */
+/* header */
 
 .app-header {
   display: flex;
@@ -103,7 +102,7 @@ body {
   color: var(--text-secondary);
 }
 
-/* CONTROL BAR */
+/* control bar */
 
 .control-bar {
   display: grid;
@@ -150,7 +149,7 @@ body {
   color: var(--text-muted);
 }
 
-/* TABS */
+/* tabs */
 
 .tabs {
   display: inline-flex;
@@ -179,7 +178,7 @@ body {
   transform: translateY(-1px);
 }
 
-/* MAIN / CARDS */
+/* main and cards */
 
 .tab-container {
   flex: 1;
@@ -232,7 +231,7 @@ body {
   margin-bottom: 10px;
 }
 
-/* PILLS */
+/* pills */
 
 .pill {
   display: inline-flex;
@@ -252,7 +251,7 @@ body {
   color: var(--accent);
 }
 
-/* TABLES */
+/* tables */
 
 .table-section {
   width: 100%;
@@ -264,6 +263,7 @@ body {
   border-collapse: collapse;
   font-size: 12px;
   margin-bottom: 12px;
+  table-layout: fixed;
 }
 
 .table thead {
@@ -299,8 +299,6 @@ body {
   color: var(--text-muted);
 }
 
-/* OWNERSHIP ICONS */
-
 .cell-fa {
   text-align: center;
   font-size: 11px;
@@ -319,8 +317,6 @@ body {
   color: #f5c451;
 }
 
-/* POSITION LABELS */
-
 .position-label {
   font-size: 11px;
   font-weight: 600;
@@ -329,7 +325,7 @@ body {
   margin: 10px 0 4px;
 }
 
-/* RESPONSIVE */
+/* responsive */
 
 @media (max-width: 900px) {
   .control-bar {
