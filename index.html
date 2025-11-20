@@ -1,4 +1,3 @@
-<!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,7 +5,6 @@
   <title>Fantasy Dashboard | Sleeper Helper</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="styles.css">
-  <!-- Papa Parse for CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script defer src="app.js"></script>
 </head>
@@ -17,7 +15,7 @@
         <div class="logo-circle">FF</div>
         <div class="logo-text">
           <div class="logo-title">Fantasy Dashboard</div>
-          <div class="logo-subtitle">Powered by Sleeper + custom ranks</div>
+          <div class="logo-subtitle">Powered by Sleeper and custom ranks</div>
         </div>
       </div>
       <div class="header-meta">
@@ -38,8 +36,8 @@
         <label class="control-label">Rest of Season CSV</label>
         <input type="file" id="rosCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Expected headers: 
-          rank,player,position,pos_rank,tier,move,ros,next4,ppg,bye
+          Flexible headers. Recommended columns:
+          rank, player, position, pos_rank, tier, move, ros, next4, ppg, bye
         </div>
       </div>
 
@@ -47,8 +45,8 @@
         <label class="control-label">This Week CSV</label>
         <input type="file" id="weekCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Expected headers:
-          player,position,opponent,proj_points,matchup,tier
+          Flexible headers. Recommended columns:
+          player, position, opponent, proj_points, matchup, tier
         </div>
       </div>
     </section>
@@ -60,12 +58,11 @@
     </nav>
 
     <main class="tab-container">
-      <!-- TEAMS TAB -->
       <section id="teamsTab" class="tab-content active">
         <div class="card">
           <div class="card-header">
             <div class="card-title">Team view</div>
-            <div class="card-subtitle">Compare lineups using your ROS rankings</div>
+            <div class="card-subtitle">All players on the roster with ROS strength by position</div>
           </div>
           <div class="card-body">
             <div class="inline-controls">
@@ -87,8 +84,8 @@
 
         <div class="card" id="upgradeCard" style="display:none;">
           <div class="card-header">
-            <div class="card-title">Upgrade candidates vs your worst starter</div>
-            <div class="card-subtitle">Players ranked better than your lowest ranked starter at each position</div>
+            <div class="card-title">Top free agents available</div>
+            <div class="card-subtitle">Best unowned players in this league based on your ROS ranks</div>
           </div>
           <div class="card-body">
             <div id="upgradeContent" class="table-section"></div>
@@ -96,30 +93,28 @@
         </div>
       </section>
 
-      <!-- THIS WEEK TAB -->
       <section id="weekTab" class="tab-content">
         <div class="card">
           <div class="card-header">
             <div class="card-title">This week rankings</div>
             <div class="card-subtitle">
-              Visual view of your weekly ranks. Colors show projections and matchup strength.
+              Visual weekly ranks by position. Colors show projections and matchup strength.
             </div>
           </div>
           <div class="card-body" id="weekContent">
             <div class="muted-text">
-              Upload your "This Week" CSV to view positional tables.
+              Upload your This Week CSV to view positional tables.
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ROS TAB -->
       <section id="rosTab" class="tab-content">
         <div class="card">
           <div class="card-header">
             <div class="card-title">Rest of season big board</div>
             <div class="card-subtitle">
-              1 - 150 ranks with strength of schedule, movement, and ownership by league.
+              Overall ranks with movement, schedule strength, and ownership by league.
             </div>
           </div>
           <div class="card-body" id="rosContent">
