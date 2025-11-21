@@ -45,7 +45,7 @@ body {
   gap: 16px;
 }
 
-/* header */
+/* HEADER */
 
 .app-header {
   display: flex;
@@ -102,7 +102,7 @@ body {
   color: var(--text-secondary);
 }
 
-/* control bar */
+/* CONTROL BAR */
 
 .control-bar {
   display: grid;
@@ -149,7 +149,7 @@ body {
   color: var(--text-muted);
 }
 
-/* tabs */
+/* TABS */
 
 .tabs {
   display: inline-flex;
@@ -178,7 +178,7 @@ body {
   transform: translateY(-1px);
 }
 
-/* main and cards */
+/* MAIN / CARDS */
 
 .tab-container {
   flex: 1;
@@ -231,7 +231,7 @@ body {
   margin-bottom: 10px;
 }
 
-/* pills */
+/* PILLS */
 
 .pill {
   display: inline-flex;
@@ -251,7 +251,7 @@ body {
   color: var(--accent);
 }
 
-/* tables */
+/* TABLES */
 
 .table-section {
   width: 100%;
@@ -294,6 +294,15 @@ body {
   border-top: 2px solid rgba(255, 255, 255, 0.12);
 }
 
+.position-label-row td {
+  background: rgba(20, 23, 34, 0.9);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
 .muted-text {
   font-size: 12px;
   color: var(--text-muted);
@@ -307,7 +316,7 @@ body {
 .cell-own {
   text-align: center;
   font-size: 11px;
-} 
+}
 
 .icon-fa {
   color: #8fd7ff;
@@ -317,15 +326,7 @@ body {
   color: #f5c451;
 }
 
-.position-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin: 10px 0 4px;
-}
-
-/* responsive */
+/* RESPONSIVE */
 
 @media (max-width: 900px) {
   .control-bar {
