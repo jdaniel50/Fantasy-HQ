@@ -314,68 +314,25 @@ body {
   color: var(--text-muted);
 }
 
-.cell-fa {
+/* OWNERSHIP ROW HIGHLIGHT (This Week + ROS) */
+
+.row-mine {
+  background-color: rgba(245, 196, 81, 0.10);
+}
+
+.row-fa {
+  background-color: rgba(52, 152, 219, 0.10);
+}
+
+/* MODERN COLORED CELLS */
+
+.col-badge {
+  border-radius: 8px;
+  font-weight: 600;
   text-align: center;
-  font-size: 11px;
-}
-
-.cell-own {
-  text-align: center;
-  font-size: 11px;
-}
-
-.icon-fa {
-  color: #8fd7ff;
-  font-size: 11px;
-  margin-right: 3px;
-}
-
-.icon-own {
-  color: #f5c451;
-  font-size: 13px;
-  margin-right: 3px;
-}
-
-/* BADGE CHIPS (circle + fading bar) */
-
-.badge-chip {
-  --chip-color: #00ff00;
-  --chip-text-color: #ffffff;
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-}
-
-.badge-circle {
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--chip-color);
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 2;
-}
-
-.badge-circle-inner {
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--chip-text-color);
-}
-
-.badge-bar {
-  position: absolute;
-  left: 10px;
-  right: 0;
-  height: 16px;
-  border-radius: 999px;
-  background: linear-gradient(to right, var(--chip-color), transparent);
-  opacity: 0.9;
-  z-index: 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 0 8px rgba(0, 0, 0, 0.4);
 }
 
 /* SPECIFIC TABLE LAYOUTS */
@@ -425,13 +382,7 @@ body {
   min-width: 190px; /* player name wider */
 }
 
-/* team columns (after FA) */
-.ros-table th:nth-child(n+12),
-.ros-table td:nth-child(n+12) {
-  min-width: 190px;
-}
-
-/* COLUMN HIGHLIGHT */
+/* COL HIGHLIGHT (if used later) */
 
 .col-highlight {
   background: rgba(255, 255, 255, 0.05);
