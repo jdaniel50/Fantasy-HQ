@@ -45,7 +45,7 @@
         <label class="control-label">This Week CSV</label>
         <input type="file" id="weekCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Expected wide layout: Rank / Quarterback ... Rank / Running Back ... Rank / Wide Receiver ... Rank / Tight End ... Rank / Defense ... Rank / FLEX (x2)
+          Wide layout: QB / RB / WR / TE / Defense / FLEX (two FLEX blocks) on the same row.
         </div>
       </div>
     </section>
@@ -101,12 +101,27 @@
           <div class="card-header">
             <div class="card-title">This week rankings</div>
             <div class="card-subtitle">
-              Weekly ranks by position. Colors show projections and matchup strength. Neutral = yellow.
+              Weekly ranks by position. Colors show projections and matchup strength with circle indicators.
             </div>
           </div>
-          <div class="card-body" id="weekContent">
-            <div class="muted-text">
-              Upload your This Week CSV to view positional tables.
+          <div class="card-body">
+            <div class="inline-controls">
+              <div class="control-group">
+                <label class="control-label">Position</label>
+                <select id="weekPositionSelect" class="select-input">
+                  <option value="QB">QB</option>
+                  <option value="RB">RB</option>
+                  <option value="WR">WR</option>
+                  <option value="TE">TE</option>
+                  <option value="FLEX">FLEX</option>
+                  <option value="DST">DST</option>
+                </select>
+              </div>
+            </div>
+            <div id="weekContent" class="table-section">
+              <div class="muted-text">
+                Upload your This Week CSV to view positional tables.
+              </div>
             </div>
           </div>
         </div>
@@ -118,7 +133,7 @@
           <div class="card-header">
             <div class="card-title">Rest of season big board</div>
             <div class="card-subtitle">
-              Overall ranks with movement, schedule strength, and ownership by league. Neutral = yellow.
+              Overall ranks with movement, schedule strength, and ownership by league. Click a team header to highlight that column.
             </div>
           </div>
           <div class="card-body" id="rosContent">
