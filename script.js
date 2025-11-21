@@ -893,7 +893,7 @@ function updatePresenterBubbleVisibility() {
 
 /* ------------------------------------------
    NOTES HANDLING
--------------------------------------------*/
+-------------------------------------------*/ 
 
 function syncPresentationNotes() {
   const views = document.querySelectorAll("[data-note-view]");
