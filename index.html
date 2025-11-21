@@ -1,235 +1,130 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Fantasy HQ Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <style>
-    body {
-      font-family: system-ui, sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #0b1020;
-      color: #f7f7f7;
-      overflow-x: hidden;
-    }
-
-    h1 {
-      margin: 0;
-      margin-bottom: 1rem;
-      font-size: 2rem;
-    }
-
-    /* Fixed header */
-    #fixed-header {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      padding: 1.5rem;
-      background: #0b1020;
-      z-index: 9999;
-      border-bottom: 2px solid #1b2038;
-    }
-
-    .league-tabs,
-    .subtabs {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
-    }
-
-    .tab-btn {
-      padding: 0.5rem 0.9rem;
-      background: #1b2038;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      color: #e0e0e0;
-    }
-
-    .tab-btn.active {
-      background: #4169e1;
-      color: white;
-    }
-
-    #presentation-toggle {
-      margin-bottom: 0.75rem;
-    }
-
-    #content {
-      margin-top: 260px;
-      padding: 1.5rem;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 1.5rem;
-      background: #151a2e;
-      border-radius: 6px;
-      overflow: hidden;
-    }
-
-    th,
-    td {
-      padding: 0.6rem;
-      border-bottom: 1px solid #22263d;
-      vertical-align: middle;
-    }
-
-    th {
-      background: #1f2340;
-      text-align: left;
-    }
-
-    /* Notes */
-    .note-box {
-      width: 100%;
-      margin-top: 0.4rem;
-      padding: 0.4rem;
-      border-radius: 4px;
-      border: none;
-      background: #21263f;
-      color: #ffffff;
-      resize: vertical;
-      min-height: 48px;
-    }
-
-    .presentation-note-view {
-      display: none;
-      font-weight: bold;
-      padding: 0.4rem 0;
-      white-space: pre-wrap;
-      color: #ffffff;
-    }
-
-    .presentation-mode .presentation-note-view {
-      display: block;
-    }
-
-    .presentation-mode .note-box {
-      display: none;
-    }
-
-    .small-label {
-      font-size: 0.85rem;
-      opacity: 0.85;
-    }
-
-    .power-input {
-      width: 50px;
-      padding: 0.3rem;
-      border-radius: 4px;
-      border: none;
-      background: #21263f;
-      color: #fff;
-      text-align: center;
-    }
-
-    .team-with-avatar {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    .avatar {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      object-fit: cover;
-      background: #000;
-    }
-
-    /* Reveal animation */
-    .fade-in {
-      opacity: 0;
-      animation: fadeIn 0.45s ease forwards;
-    }
-
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(6px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    /* Presenter Bubble */
-    #presenter-bubble {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      width: 200px;
-      background: rgba(20, 25, 45, 0.9);
-      padding: 0.75rem;
-      border-radius: 10px;
-      color: #fff;
-      font-size: 0.85rem;
-      box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
-      opacity: 0.75;
-      transition: opacity 0.2s;
-      z-index: 99999;
-      display: none;
-    }
-
-    #presenter-bubble:hover {
-      opacity: 1;
-    }
-
-    #presenter-title {
-      font-size: 0.75rem;
-      opacity: 0.8;
-      margin-bottom: 0.4rem;
-    }
-
-    #presenter-next {
-      width: 100%;
-      padding: 0.5rem;
-      border-radius: 6px;
-      background: #4169e1;
-      text-align: center;
-      cursor: pointer;
-      color: white;
-      font-weight: bold;
-    }
-  </style>
+  <meta charset="UTF-8">
+  <title>Fantasy Dashboard | Sleeper Helper</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script defer src="app.js"></script>
 </head>
-
 <body>
-  <div id="fixed-header">
-    <h1>Fantasy HQ Dashboard</h1>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-circle">FF</div>
+        <div class="logo-text">
+          <div class="logo-title">Fantasy Dashboard</div>
+          <div class="logo-subtitle">Powered by Sleeper and custom ranks</div>
+        </div>
+      </div>
+      <div class="header-meta">
+        <span id="currentSeasonLabel"></span>
+        <span id="currentWeekLabel" class="pill pill-outline"></span>
+      </div>
+    </header>
 
-    <button id="presentation-toggle" class="tab-btn">
-      Presentation Mode: OFF
-    </button>
+    <section class="control-bar">
+      <div class="control-group">
+        <label class="control-label">League</label>
+        <select id="leagueSelect" class="select-input">
+          <option value="">Loading leagues...</option>
+        </select>
+      </div>
 
-    <div class="league-tabs">
-      <button class="tab-btn" data-league="lor">League of Record</button>
-      <button class="tab-btn" data-league="ffl">FFL</button>
-      <button class="tab-btn" data-league="dynasty">Dynasty Champs</button>
-    </div>
+      <div class="control-group">
+        <label class="control-label">Rest of Season CSV</label>
+        <input type="file" id="rosCsvInput" accept=".csv" class="file-input">
+        <div class="hint">
+          Flexible headers. Recommended columns:
+          rank, player, position, pos_rank, tier, move, ros, next4, ppg, bye
+        </div>
+      </div>
 
-    <div class="subtabs" id="subtabs" style="display:none;">
-      <button class="tab-btn" data-section="standings">Standings</button>
-      <button class="tab-btn" data-section="matchups">Matchups</button>
-      <button class="tab-btn" data-section="power">Power Rankings</button>
-    </div>
+      <div class="control-group">
+        <label class="control-label">This Week CSV</label>
+        <input type="file" id="weekCsvInput" accept=".csv" class="file-input">
+        <div class="hint">
+          Flexible headers. Recommended columns:
+          player, position, opponent, proj_points, matchup, tier
+        </div>
+      </div>
+    </section>
+
+    <nav class="tabs">
+      <button class="tab-button active" data-tab="teamsTab">Teams</button>
+      <button class="tab-button" data-tab="weekTab">ThisWeek</button>
+      <button class="tab-button" data-tab="rosTab">RestOfSeason</button>
+    </nav>
+
+    <main class="tab-container">
+      <section id="teamsTab" class="tab-content active">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Team view</div>
+            <div class="card-subtitle">All players on the roster with ROS strength by position</div>
+          </div>
+          <div class="card-body">
+            <div class="inline-controls">
+              <div class="control-group">
+                <label class="control-label">Team</label>
+                <select id="teamSelect" class="select-input">
+                  <option value="">Select a league first</option>
+                </select>
+              </div>
+              <div class="control-group">
+                <span id="teamOwnerLabel" class="pill pill-soft"></span>
+              </div>
+            </div>
+            <div id="teamsContent" class="table-section">
+              <div class="muted-text">Select a league and team to see the lineup.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="upgradeCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">Top free agents available</div>
+            <div class="card-subtitle">Best unowned players in this league based on your ROS ranks</div>
+          </div>
+          <div class="card-body">
+            <div id="upgradeContent" class="table-section"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="weekTab" class="tab-content">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">This week rankings</div>
+            <div class="card-subtitle">
+              Visual weekly ranks by position. Colors show projections and matchup strength.
+            </div>
+          </div>
+          <div class="card-body" id="weekContent">
+            <div class="muted-text">
+              Upload your This Week CSV to view positional tables.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="rosTab" class="tab-content">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Rest of season big board</div>
+            <div class="card-subtitle">
+              Overall ranks with movement, schedule strength, and ownership by league.
+            </div>
+          </div>
+          <div class="card-body" id="rosContent">
+            <div class="muted-text">
+              Upload your ROS CSV to see the board. Select a league to see FA and team ownership.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
-
-  <div id="content"></div>
-
-  <!-- Floating Presenter Bubble -->
-  <div id="presenter-bubble">
-    <div id="presenter-title">League — Section</div>
-    <div id="presenter-next">NEXT →</div>
-  </div>
-
-  <script src="script.js"></script>
 </body>
 </html>
