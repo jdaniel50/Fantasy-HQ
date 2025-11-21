@@ -320,10 +320,74 @@ body {
 
 .icon-fa {
   color: #8fd7ff;
+  font-size: 11px;
+  margin-right: 3px;
 }
 
 .icon-own {
   color: #f5c451;
+  font-size: 13px;
+  margin-right: 3px;
+}
+
+/* COLOR DOTS */
+
+.color-dot {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+/* SPECIFIC TABLE LAYOUTS */
+
+.teams-table th:nth-child(1),
+.teams-table td:nth-child(1) {
+  min-width: 190px;
+}
+
+.teams-table th:nth-child(n+2),
+.teams-table td:nth-child(n+2) {
+  min-width: 70px;
+}
+
+.week-table th:nth-child(1),
+.week-table td:nth-child(1) {
+  min-width: 180px;
+}
+
+.week-table th:nth-child(2),
+.week-table td:nth-child(2) {
+  min-width: 60px;
+}
+
+.week-table th:nth-child(3),
+.week-table td:nth-child(3),
+.week-table th:nth-child(4),
+.week-table td:nth-child(4),
+.week-table th:nth-child(5),
+.week-table td:nth-child(5),
+.week-table th:nth-child(6),
+.week-table td:nth-child(6) {
+  min-width: 70px;
+}
+
+.ros-table th,
+.ros-table td {
+  min-width: 80px;
+}
+
+.ros-table th:nth-child(2),
+.ros-table td:nth-child(2) {
+  min-width: 190px;
+}
+
+/* COLUMN HIGHLIGHT */
+
+.col-highlight {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* RESPONSIVE */
