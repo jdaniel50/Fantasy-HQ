@@ -5,6 +5,7 @@
   <title>Fantasy Dashboard | Sleeper Helper</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="styles.css">
+  <!-- Papa Parse for CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script defer src="app.js"></script>
 </head>
@@ -36,8 +37,7 @@
         <label class="control-label">Rest of Season CSV</label>
         <input type="file" id="rosCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Flexible headers. Recommended columns:
-          rank, player, position, pos_rank, tier, move, ros, next4, ppg, bye
+          Expected headers: Overall, Player, Position, Positional Rank, Tier, Team, ROS, Next 4, PPG, Bye
         </div>
       </div>
 
@@ -45,8 +45,7 @@
         <label class="control-label">This Week CSV</label>
         <input type="file" id="weekCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Flexible headers. Recommended columns:
-          player, position, opponent, proj_points, matchup, tier
+          Expected wide layout: Rank / Quarterback ... Rank / Running Back ... Rank / Wide Receiver ... Rank / Tight End ... Rank / Defense ... Rank / FLEX (x2)
         </div>
       </div>
     </section>
@@ -58,11 +57,14 @@
     </nav>
 
     <main class="tab-container">
+      <!-- TEAMS TAB -->
       <section id="teamsTab" class="tab-content active">
         <div class="card">
           <div class="card-header">
             <div class="card-title">Team view</div>
-            <div class="card-subtitle">All players on the roster with ROS strength by position</div>
+            <div class="card-subtitle">
+              All players on the roster with ROS strength, grouped by position.
+            </div>
           </div>
           <div class="card-body">
             <div class="inline-controls">
@@ -93,12 +95,13 @@
         </div>
       </section>
 
+      <!-- THIS WEEK TAB -->
       <section id="weekTab" class="tab-content">
         <div class="card">
           <div class="card-header">
             <div class="card-title">This week rankings</div>
             <div class="card-subtitle">
-              Visual weekly ranks by position. Colors show projections and matchup strength.
+              Weekly ranks by position. Colors show projections and matchup strength. Neutral = yellow.
             </div>
           </div>
           <div class="card-body" id="weekContent">
@@ -109,12 +112,13 @@
         </div>
       </section>
 
+      <!-- ROS TAB -->
       <section id="rosTab" class="tab-content">
         <div class="card">
           <div class="card-header">
             <div class="card-title">Rest of season big board</div>
             <div class="card-subtitle">
-              Overall ranks with movement, schedule strength, and ownership by league.
+              Overall ranks with movement, schedule strength, and ownership by league. Neutral = yellow.
             </div>
           </div>
           <div class="card-body" id="rosContent">
