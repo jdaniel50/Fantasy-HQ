@@ -28,16 +28,19 @@
     <section class="control-bar">
       <div class="control-group">
         <label class="control-label">League</label>
-        <select id="leagueSelect" class="select-input">
-          <option value="">Loading leagues...</option>
-        </select>
+        <div class="league-row">
+          <select id="leagueSelect" class="select-input">
+            <option value="">Loading leagues...</option>
+          </select>
+          <button id="refreshSleeperBtn" class="btn btn-secondary">Refresh Sleeper</button>
+        </div>
       </div>
 
       <div class="control-group">
         <label class="control-label">Rest of Season CSV</label>
         <input type="file" id="rosCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Expected headers: Overall, Player, Position, Positional Rank, Tier, Team, ROS, Next 4, PPG, Bye
+          Headers: Overall, Player, Position, Positional Rank, Tier, Team, ROS, Next 4, PPG, Bye
         </div>
       </div>
 
@@ -45,15 +48,15 @@
         <label class="control-label">This Week CSV</label>
         <input type="file" id="weekCsvInput" accept=".csv" class="file-input">
         <div class="hint">
-          Wide layout with Rank + QB/RB/WR/TE/Defense/FLEX blocks on each row.
+          Wide layout row with Rank + QB/RB/WR/TE/DST/FLEX blocks as you defined.
         </div>
       </div>
     </section>
 
     <nav class="tabs">
       <button class="tab-button active" data-tab="teamsTab">Teams</button>
-      <button class="tab-button" data-tab="weekTab">ThisWeek</button>
-      <button class="tab-button" data-tab="rosTab">RestOfSeason</button>
+      <button class="tab-button" data-tab="weekTab">This Week</button>
+      <button class="tab-button" data-tab="rosTab">Rest of Season</button>
     </nav>
 
     <main class="tab-container">
@@ -131,7 +134,7 @@
       <section id="rosTab" class="tab-content">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Rest of season big board</div>
+            <div class="card-title">Rest of Season big board</div>
             <div class="card-subtitle">
               Overall ranks with movement, schedule strength, and bye status. Rows highlight your players and free agents.
             </div>
