@@ -107,7 +107,7 @@ body {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.05fr) minmax(0, 1.05fr);
   gap: 12px;
 }
 
@@ -128,6 +128,12 @@ body {
   color: var(--text-muted);
 }
 
+.league-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .select-input,
 .file-input {
   background: var(--bg-elevated-soft);
@@ -137,6 +143,7 @@ body {
   padding: 8px 10px;
   font-size: 14px;
   outline: none;
+  min-width: 0;
 }
 
 .select-input:focus,
@@ -148,6 +155,27 @@ body {
 .hint {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+/* BUTTONS */
+
+.btn {
+  border-radius: var(--radius-md);
+  border: none;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-secondary {
+  background: #242736;
+  color: var(--text-secondary);
+  border: 1px solid #3a3f55;
+}
+
+.btn-secondary:hover {
+  background: #2e3344;
 }
 
 /* TABS */
@@ -317,11 +345,11 @@ body {
 /* OWNERSHIP ROW HIGHLIGHT (This Week + ROS) */
 
 .row-mine {
-  background-color: rgba(245, 196, 81, 0.10);
+  background-color: rgba(245, 196, 81, 0.25);
 }
 
 .row-fa {
-  background-color: rgba(52, 152, 219, 0.10);
+  background-color: rgba(52, 152, 219, 0.25);
 }
 
 /* MODERN COLORED CELLS */
@@ -337,15 +365,34 @@ body {
 
 /* SPECIFIC TABLE LAYOUTS */
 
+/* Teams: Player | Rank | Pos Rank | Tier | PPG | Bye | ROS | Next 4 */
+
 .teams-table th:nth-child(1),
 .teams-table td:nth-child(1) {
   min-width: 190px;
 }
 
-.teams-table th:nth-child(n+2),
-.teams-table td:nth-child(n+2) {
-  min-width: 70px;
+.teams-table th:nth-child(2),
+.teams-table td:nth-child(2),
+.teams-table th:nth-child(3),
+.teams-table td:nth-child(3),
+.teams-table th:nth-child(4),
+.teams-table td:nth-child(4),
+.teams-table th:nth-child(5),
+.teams-table td:nth-child(5),
+.teams-table th:nth-child(6),
+.teams-table td:nth-child(6) {
+  min-width: 60px;
 }
+
+.teams-table th:nth-child(7),
+.teams-table td:nth-child(7),
+.teams-table th:nth-child(8),
+.teams-table td:nth-child(8) {
+  min-width: 80px;
+}
+
+/* This week: Rank | Player | Opp | Proj | Match | Tier */
 
 .week-table th:nth-child(1),
 .week-table td:nth-child(1) {
@@ -354,7 +401,7 @@ body {
 
 .week-table th:nth-child(2),
 .week-table td:nth-child(2) {
-  min-width: 180px;
+  min-width: 190px;
 }
 
 .week-table th:nth-child(3),
@@ -364,28 +411,39 @@ body {
 .week-table th:nth-child(5),
 .week-table td:nth-child(5),
 .week-table th:nth-child(6),
-.week-table td:nth-child(6),
-.week-table th:nth-child(7),
-.week-table td:nth-child(7) {
+.week-table td:nth-child(6) {
   min-width: 70px;
 }
 
-/* ROS TABLE */
+/* ROS TABLE: Rank | Player | Pos | Pos Rank | Tier | Move | ROS | Next 4 | PPG | Bye */
 
-.ros-table th,
-.ros-table td {
-  min-width: 80px;
+.ros-table th:nth-child(1),
+.ros-table td:nth-child(1) {
+  min-width: 50px;
 }
 
 .ros-table th:nth-child(2),
 .ros-table td:nth-child(2) {
-  min-width: 190px; /* player name wider */
+  min-width: 190px;
 }
 
-/* COL HIGHLIGHT (if used later) */
-
-.col-highlight {
-  background: rgba(255, 255, 255, 0.05);
+.ros-table th:nth-child(3),
+.ros-table td:nth-child(3),
+.ros-table th:nth-child(4),
+.ros-table td:nth-child(4),
+.ros-table th:nth-child(5),
+.ros-table td:nth-child(5),
+.ros-table th:nth-child(6),
+.ros-table td:nth-child(6),
+.ros-table th:nth-child(7),
+.ros-table td:nth-child(7),
+.ros-table th:nth-child(8),
+.ros-table td:nth-child(8),
+.ros-table th:nth-child(9),
+.ros-table td:nth-child(9),
+.ros-table th:nth-child(10),
+.ros-table td:nth-child(10) {
+  min-width: 70px;
 }
 
 /* RESPONSIVE */
