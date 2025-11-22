@@ -15,7 +15,7 @@ let myUserId = null;
 
 let rosData = [];
 let rosByName = new Map();
-let weekData = []; // flattened per-player rows from "This Week"
+let weekData = [];
 
 const leagueSelect = document.getElementById('leagueSelect');
 const teamSelect = document.getElementById('teamSelect');
@@ -28,12 +28,17 @@ const rosContent = document.getElementById('rosContent');
 const currentSeasonLabel = document.getElementById('currentSeasonLabel');
 const currentWeekLabel = document.getElementById('currentWeekLabel');
 const weekPositionSelect = document.getElementById('weekPositionSelect');
+const refreshSleeperBtn = document.getElementById('refreshSleeperBtn');
+
+let controlsInitialized = false;
 
 // INIT
+
 document.addEventListener('DOMContentLoaded', () => {
   loadFromLocal();
   initTabs();
   initCsvInputs();
+  initControls();
   initSleeper().catch(err => {
     console.error(err);
     leagueSelect.innerHTML = '<option value="">Error loading leagues</option>';
@@ -99,6 +104,32 @@ function initTabs() {
   }
 }
 
+// CONTROLS
+
+function initControls() {
+  if (controlsInitialized) return;
+
+  leagueSelect.addEventListener('change', () => {
+    activeLeagueId = leagueSelect.value || null;
+    populateTeamSelect();
+    renderTeamsTab();
+    renderWeekTab();
+    renderRosTab();
+  });
+
+  teamSelect.addEventListener('change', () => {
+    renderTeamsTab();
+  });
+
+  if (refreshSleeperBtn) {
+    refreshSleeperBtn.addEventListener('click', async () => {
+      await refreshSleeperData();
+    });
+  }
+
+  controlsInitialized = true;
+}
+
 // CSV INPUTS
 
 function initCsvInputs() {
@@ -130,7 +161,29 @@ function handleCsvInput(inputEl, type) {
         return;
       }
 
-      rosData = parsed.data.map(normalizeRosRow).filter(r => r.player);
+      // Use previous rosData (from localStorage) to compute moves
+      const prevMap = new Map();
+      rosData.forEach(r => {
+        if (!r || !r.player) return;
+        const key = r.player.toLowerCase();
+        if (!prevMap.has(key) && Number.isFinite(r.rank)) {
+          prevMap.set(key, r.rank);
+        }
+      });
+
+      const newRos = parsed.data.map(normalizeRosRow).filter(r => r.player);
+      newRos.forEach(row => {
+        const key = row.player.toLowerCase();
+        const prevRank = prevMap.get(key);
+        if (Number.isFinite(prevRank) && Number.isFinite(row.rank)) {
+          // Positive = moved up (better rank: lower number)
+          row.move = prevRank - row.rank;
+        } else {
+          row.move = null;
+        }
+      });
+
+      rosData = newRos;
       rosByName.clear();
       rosData.forEach(row => {
         rosByName.set(row.player.toLowerCase(), row);
@@ -202,7 +255,7 @@ function normalizeRosRow(raw) {
     position: getStr('position', 'pos').toUpperCase(),
     pos_rank: getNum('positional rank', 'pos_rank', 'position_rank'),
     tier: getNum('tier'),
-    move: getNum('move'),
+    move: null, // will be computed from previous ROS
     team: getStr('team'),
     ros: getNum('ros', 'ros schedule', 'ros_schedule'),
     next4: getNum('next 4', 'next4', 'next_4'),
@@ -301,7 +354,7 @@ function buildWeekDataFromRows(rows) {
       teamIdx: null,
       oppIdx: defNameIdx + 1,
       totalIdx: null,
-      matchupIdx: defNameIdx + 3, // Spread as proxy
+      matchupIdx: defNameIdx + 3, // Spread
       tierIdx: defNameIdx + 4,
       posIdx: null,
       fromFlex: false
@@ -376,8 +429,8 @@ function buildWeekDataFromRows(rows) {
       flat.push({
         player: name,
         team,
-        group,           // QB/RB/WR/TE/DST/FLEX
-        position: basePos, // actual position
+        group,
+        position: basePos,
         opponent,
         proj_points: Number.isFinite(projPoints) ? projPoints : null,
         matchup: Number.isFinite(matchupVal) ? matchupVal : null,
@@ -393,6 +446,24 @@ function buildWeekDataFromRows(rows) {
 // SLEEPER INIT
 
 async function initSleeper() {
+  await fetchSleeperCoreData();
+  populateLeagueSelect();
+  populateTeamSelect();
+  renderTeamsTab();
+  renderWeekTab();
+  renderRosTab();
+}
+
+async function refreshSleeperData() {
+  await fetchSleeperCoreData();
+  populateLeagueSelect();
+  populateTeamSelect();
+  renderTeamsTab();
+  renderWeekTab();
+  renderRosTab();
+}
+
+async function fetchSleeperCoreData() {
   const stateRes = await fetch('https://api.sleeper.app/v1/state/nfl');
   sleeperState = await stateRes.json();
   if (sleeperState.season) {
@@ -410,7 +481,7 @@ async function initSleeper() {
   playersById = await playersRes.json();
   buildPlayersByNameIndex();
 
-  const leagueOptions = [];
+  leaguesMap.clear();
   for (const leagueId of LEAGUE_IDS) {
     const infoRes = await fetch(`https://api.sleeper.app/v1/league/${leagueId}`);
     const info = await infoRes.json();
@@ -422,18 +493,7 @@ async function initSleeper() {
     const users = await usersRes.json();
 
     leaguesMap.set(leagueId, { info, rosters, users });
-
-    leagueOptions.push({
-      id: leagueId,
-      name: info.name || `League ${leagueId}`
-    });
   }
-
-  populateLeagueSelect(leagueOptions);
-
-  renderTeamsTab();
-  renderWeekTab();
-  renderRosTab();
 }
 
 // NAME INDEXING & LOOKUP
@@ -441,7 +501,7 @@ async function initSleeper() {
 function normalizeNameKey(name) {
   if (!name) return '';
   let n = name.toLowerCase();
-  n = n.replace(/[^a-z\s]/g, ' '); // remove punctuation/digits
+  n = n.replace(/[^a-z\s]/g, ' ');
   n = n.replace(/\b(jr|sr|ii|iii|iv|v|vi)\b/g, '');
   n = n.replace(/\s+/g, ' ').trim();
   const parts = n.split(' ');
@@ -477,7 +537,7 @@ function lookupPlayerId(name, meta = {}) {
   const targetPos = meta.position ? meta.position.toUpperCase() : null;
   const targetTeam = meta.team ? meta.team.toUpperCase() : null;
 
-  // 1) Try exact-name candidate, but verify it matches meta if provided
+  // 1) Exact-name candidate with meta check
   let pid = playersByNameLower.get(exactKey);
   if (pid) {
     const p = playersById[pid];
@@ -488,43 +548,39 @@ function lookupPlayerId(name, meta = {}) {
         return pid;
       }
     }
-    // else fall through to fuzzy match
   }
 
   // 2) Fuzzy match using normalized name
   const simple = normalizeNameKey(name);
   if (!simple) return null;
 
-  const lastName = (() => {
-    const parts = simple.split(' ');
-    return parts[parts.length - 1] || '';
-  })();
+  const simpleParts = simple.split(' ');
+  const lastName = simpleParts[simpleParts.length - 1] || '';
+  const inputFirst = simpleParts[0];
 
   let bestId = null;
   let bestScore = -1;
 
-  // Search all players that share this last name and score them by meta alignment
   if (lastName) {
     for (const [candidateId, p] of Object.entries(playersById)) {
       const fullName = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
       if (!fullName) continue;
-      const simpleSleeper = normalizeNameKey(fullName);
-      const sleeperParts = simpleSleeper.split(' ');
-      const sleeperLast = sleeperParts[sleeperParts.length - 1] || '';
+
+      const sleeperSimple = normalizeNameKey(fullName);
+      const ssParts = sleeperSimple.split(' ');
+      const sleeperLast = ssParts[ssParts.length - 1] || '';
+      const sleeperFirst = ssParts[0];
+
       if (sleeperLast !== lastName) continue;
 
-      let score = 1; // last name match
+      let score = 1; // last name
 
-      // First-name alignment bonus
-      const originalParts = simple.split(' ');
-      const inputFirst = originalParts[0];
-      const sleeperFirst = sleeperParts[0];
       if (inputFirst && sleeperFirst && inputFirst === sleeperFirst) {
         score += 2;
       }
 
-      if (targetPos && p.position === targetPos) score += 2;
-      if (targetTeam && p.team === targetTeam) score += 2;
+      if (targetPos && p.position === targetPos) score += 3;
+      if (targetTeam && p.team === targetTeam) score += 3;
 
       if (score > bestScore) {
         bestScore = score;
@@ -540,32 +596,36 @@ function lookupPlayerId(name, meta = {}) {
   return null;
 }
 
-// LEAGUE SELECT
+// LEAGUE & TEAM SELECT
 
-function populateLeagueSelect(options) {
+function populateLeagueSelect() {
   leagueSelect.innerHTML = '';
+
   const placeholder = document.createElement('option');
   placeholder.value = '';
   placeholder.textContent = 'Select a league';
   leagueSelect.appendChild(placeholder);
 
-  options.forEach(opt => {
-    const o = document.createElement('option');
-    o.value = opt.id;
-    o.textContent = opt.name;
-    leagueSelect.appendChild(o);
+  const existingIds = [...leaguesMap.keys()];
+
+  existingIds.forEach(id => {
+    const info = leaguesMap.get(id)?.info;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = info?.name || `League ${id}`;
+    leagueSelect.appendChild(opt);
   });
 
-  leagueSelect.addEventListener('change', () => {
-    activeLeagueId = leagueSelect.value || null;
-    populateTeamSelect();
-    renderTeamsTab();
-    renderRosTab();
-    renderWeekTab();
-  });
+  if (activeLeagueId && leaguesMap.has(activeLeagueId)) {
+    leagueSelect.value = activeLeagueId;
+  } else if (existingIds.length) {
+    activeLeagueId = existingIds[0];
+    leagueSelect.value = activeLeagueId;
+  } else {
+    activeLeagueId = null;
+    leagueSelect.value = '';
+  }
 }
-
-// TEAMS TAB
 
 function populateTeamSelect() {
   teamSelect.innerHTML = '';
@@ -613,11 +673,9 @@ function populateTeamSelect() {
     o.textContent = team.displayName + (team.isMine ? ' (You)' : '');
     teamSelect.appendChild(o);
   });
-
-  teamSelect.addEventListener('change', () => {
-    renderTeamsTab();
-  });
 }
+
+// TEAMS TAB
 
 function renderTeamsTab() {
   if (!activeLeagueId) {
@@ -678,16 +736,19 @@ function renderTeamsTab() {
     return idx === -1 ? 99 : idx;
   };
 
-  const sortedByPosThenRank = [...allPlayers].sort((a, b) => {
+  const sorted = [...allPlayers].sort((a, b) => {
     const pa = positionSortKey(a.position);
     const pb = positionSortKey(b.position);
     if (pa !== pb) return pa - pb;
+
     const at = a.rosRow?.tier ?? 99;
     const bt = b.rosRow?.tier ?? 99;
     if (at !== bt) return at - bt;
+
     const ar = a.rosRow?.rank ?? 9999;
     const br = b.rosRow?.rank ?? 9999;
     if (ar !== br) return ar - br;
+
     return (a.displayName || '').localeCompare(b.displayName || '');
   });
 
@@ -698,12 +759,13 @@ function renderTeamsTab() {
   thead.innerHTML = `
     <tr>
       <th>Player</th>
-      <th>POS</th>
       <th>Rank</th>
       <th>Pos Rank</th>
       <th>Tier</th>
       <th>PPG</th>
       <th>Bye</th>
+      <th>ROS</th>
+      <th>Next 4</th>
     </tr>
   `;
   table.appendChild(thead);
@@ -712,12 +774,12 @@ function renderTeamsTab() {
 
   let lastPos = null;
 
-  sortedByPosThenRank.forEach(p => {
+  sorted.forEach(p => {
     if (p.position !== lastPos) {
       const posRow = document.createElement('tr');
       posRow.className = 'position-label-row';
       const td = document.createElement('td');
-      td.colSpan = 7;
+      td.colSpan = 8;
       td.textContent = p.position || 'Pos';
       posRow.appendChild(td);
       tbody.appendChild(posRow);
@@ -730,14 +792,10 @@ function renderTeamsTab() {
     tdName.textContent = p.displayName || p.rosRow?.player || p.sleeperName || 'Unknown';
     tr.appendChild(tdName);
 
-    const tdPos = document.createElement('td');
-    tdPos.textContent = p.position;
-    tr.appendChild(tdPos);
-
-    const tdOverall = document.createElement('td');
-    tdOverall.textContent = p.rosRow?.rank ?? '';
-    applyOverallRankColor(tdOverall, p.rosRow?.rank);
-    tr.appendChild(tdOverall);
+    const tdRank = document.createElement('td');
+    tdRank.textContent = p.rosRow?.rank ?? '';
+    applyOverallRankColor(tdRank, p.rosRow?.rank);
+    tr.appendChild(tdRank);
 
     const tdPosRank = document.createElement('td');
     tdPosRank.textContent = p.rosRow?.pos_rank ?? '';
@@ -756,6 +814,16 @@ function renderTeamsTab() {
     tdBye.textContent = p.rosRow?.bye ?? '';
     applyByeColor(tdBye, p.rosRow?.bye);
     tr.appendChild(tdBye);
+
+    const tdRos = document.createElement('td');
+    tdRos.textContent = p.rosRow?.ros ?? '';
+    applyScheduleColor(tdRos, p.rosRow?.ros, null);
+    tr.appendChild(tdRos);
+
+    const tdNext4 = document.createElement('td');
+    tdNext4.textContent = p.rosRow?.next4 ?? '';
+    applyScheduleColor(tdNext4, p.rosRow?.next4, null);
+    tr.appendChild(tdNext4);
 
     tbody.appendChild(tr);
   });
@@ -816,18 +884,18 @@ function renderTopFreeAgents(ownershipContext) {
   const topFive = freeAgents.slice(0, 5);
 
   const table = document.createElement('table');
-  table.className = 'table';
+  table.className = 'table teams-table';
   const thead = document.createElement('thead');
   thead.innerHTML = `
     <tr>
-      <th>Rank</th>
       <th>Player</th>
-      <th>Pos</th>
+      <th>Rank</th>
       <th>Pos Rank</th>
       <th>Tier</th>
+      <th>PPG</th>
+      <th>Bye</th>
       <th>ROS</th>
       <th>Next 4</th>
-      <th>PPG</th>
     </tr>
   `;
   table.appendChild(thead);
@@ -836,18 +904,14 @@ function renderTopFreeAgents(ownershipContext) {
   topFive.forEach(row => {
     const tr = document.createElement('tr');
 
-    const tdRank = document.createElement('td');
-    tdRank.textContent = row.rank ?? '';
-    applyOverallRankColor(tdRank, row.rank);
-    tr.appendChild(tdRank);
-
     const tdPlayer = document.createElement('td');
     tdPlayer.textContent = row.player;
     tr.appendChild(tdPlayer);
 
-    const tdPos = document.createElement('td');
-    tdPos.textContent = row.position;
-    tr.appendChild(tdPos);
+    const tdRank = document.createElement('td');
+    tdRank.textContent = row.rank ?? '';
+    applyOverallRankColor(tdRank, row.rank);
+    tr.appendChild(tdRank);
 
     const tdPosRank = document.createElement('td');
     tdPosRank.textContent = row.pos_rank ?? '';
@@ -858,6 +922,15 @@ function renderTopFreeAgents(ownershipContext) {
     tdTier.textContent = row.tier ?? '';
     tr.appendChild(tdTier);
 
+    const tdPpg = document.createElement('td');
+    tdPpg.textContent = row.ppg ?? '';
+    tr.appendChild(tdPpg);
+
+    const tdBye = document.createElement('td');
+    tdBye.textContent = row.bye ?? '';
+    applyByeColor(tdBye, row.bye);
+    tr.appendChild(tdBye);
+
     const tdRos = document.createElement('td');
     tdRos.textContent = row.ros ?? '';
     applyScheduleColor(tdRos, row.ros, null);
@@ -867,11 +940,6 @@ function renderTopFreeAgents(ownershipContext) {
     tdNext4.textContent = row.next4 ?? '';
     applyScheduleColor(tdNext4, row.next4, null);
     tr.appendChild(tdNext4);
-
-    const tdPpg = document.createElement('td');
-    tdPpg.textContent = row.ppg ?? '';
-    applyProjectionColor(tdPpg, row.ppg, null);
-    tr.appendChild(tdPpg);
 
     tbody.appendChild(tr);
   });
@@ -931,7 +999,6 @@ function renderWeekTab() {
     <tr>
       <th>Rank</th>
       <th>${posFilter}</th>
-      <th>POS</th>
       <th>Opp</th>
       <th>Proj</th>
       <th>Match</th>
@@ -961,7 +1028,6 @@ function renderWeekTab() {
   rows.forEach(r => {
     const tr = document.createElement('tr');
 
-    // Apply row highlight for ownership
     if (ownershipContext) {
       const status = getOwnershipStatus(r.player, r.position, r.team, ownershipContext);
       if (status === 'MINE') tr.classList.add('row-mine');
@@ -972,7 +1038,7 @@ function renderWeekTab() {
       const tierRow = document.createElement('tr');
       tierRow.className = 'tier-label-row';
       const td = document.createElement('td');
-      td.colSpan = 7;
+      td.colSpan = 6;
       td.textContent = `Tier ${r.tier}`;
       tierRow.appendChild(td);
       tbody.appendChild(tierRow);
@@ -981,16 +1047,12 @@ function renderWeekTab() {
 
     const tdRank = document.createElement('td');
     tdRank.textContent = r.rank ?? '';
-    applyOverallRankColor(tdRank, r.rank);
+    // no color for rank
     tr.appendChild(tdRank);
 
     const tdPlayer = document.createElement('td');
     tdPlayer.textContent = r.player;
     tr.appendChild(tdPlayer);
-
-    const tdPos = document.createElement('td');
-    tdPos.textContent = r.position || posFilter;
-    tr.appendChild(tdPos);
 
     const tdOpp = document.createElement('td');
     tdOpp.textContent = r.opponent;
@@ -1093,7 +1155,7 @@ function renderRosTab() {
 
     const tdRank = document.createElement('td');
     tdRank.textContent = row.rank ?? '';
-    // Rank column: no color fill
+    // no color for rank in ROS
     tr.appendChild(tdRank);
 
     const tdPlayer = document.createElement('td');
@@ -1106,7 +1168,7 @@ function renderRosTab() {
 
     const tdPosRank = document.createElement('td');
     tdPosRank.textContent = row.pos_rank ?? '';
-    // no color for pos rank in ROS per your latest spec
+    // no color for pos rank in ROS
     tr.appendChild(tdPosRank);
 
     const tdTier = document.createElement('td');
@@ -1114,8 +1176,7 @@ function renderRosTab() {
     tr.appendChild(tdTier);
 
     const tdMove = document.createElement('td');
-    tdMove.textContent = row.move ?? '';
-    applyMoveColor(tdMove, row.move);
+    setMoveCell(tdMove, row.move);
     tr.appendChild(tdMove);
 
     const tdRos = document.createElement('td');
@@ -1230,18 +1291,8 @@ function summarizeSeries(values) {
 function setCellColor(td, color) {
   if (!color) return;
   td.classList.add('col-badge');
-  td.style.background = `linear-gradient(135deg, ${color}, rgba(0,0,0,0.25))`;
-
-  // auto text color: parse lightness from hsl
-  const match = /hsl\(\s*([\d.]+),\s*([\d.]+)%,\s*([\d.]+)%\s*\)/i.exec(color);
-  let textColor = '#ffffff';
-  if (match) {
-    const l = parseFloat(match[3]);
-    if (!isNaN(l) && l >= 60) {
-      textColor = '#111111';
-    }
-  }
-  td.style.color = textColor;
+  td.style.background = `linear-gradient(135deg, ${color}, rgba(0,0,0,0.35))`;
+  td.style.color = '#ffffff';
 }
 
 // Overall rank gradient: 1 green, 55 yellow, 125 red
@@ -1299,7 +1350,7 @@ function applyPosRankColor(td, position, rank) {
   setCellColor(td, color);
 }
 
-// Projections: higher = green, lowest = red, median = yellow
+// Projections / PPG: higher = green, lowest = red, median golden
 function applyProjectionColor(td, value, summary) {
   if (!Number.isFinite(value) || !summary) return;
   const { min, median, max } = summary;
@@ -1311,20 +1362,22 @@ function applyProjectionColor(td, value, summary) {
   } else if (value === min) {
     color = 'hsl(0, 70%, 50%)';
   } else if (value === median) {
-    color = 'hsl(50, 100%, 65%)';
+    color = 'hsl(50, 100%, 60%)';
   } else if (value > median) {
     const t = (value - median) / (max - median || 1);
-    const lightness = 80 - 25 * t; // 80 -> 55
-    color = `hsl(120, 70%, ${lightness}%)`;
+    const hue = 80 + (120 - 80) * t; // move toward deep green
+    const lightness = 75 - 25 * t;   // slightly darker as higher
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
   } else {
     const t = (median - value) / (median - min || 1);
-    const lightness = 80 - 25 * t;
-    color = `hsl(0, 70%, ${lightness}%)`;
+    const hue = 50 - 50 * t;   // 50 (yellow) -> 0 (red)
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
   }
   setCellColor(td, color);
 }
 
-// Matchup / schedule: lower = green, higher = red, median = yellow
+// Matchup / schedule: lower = green, higher = red, median golden
 function applyMatchupColor(td, value, summary) {
   if (!Number.isFinite(value) || !summary) return;
   const { min, median, max } = summary;
@@ -1336,15 +1389,17 @@ function applyMatchupColor(td, value, summary) {
   } else if (value === max) {
     color = 'hsl(0, 70%, 50%)';
   } else if (value === median) {
-    color = 'hsl(50, 100%, 65%)';
+    color = 'hsl(50, 100%, 60%)';
   } else if (value < median) {
     const t = (median - value) / (median - min || 1);
-    const lightness = 80 - 25 * t;
-    color = `hsl(120, 70%, ${lightness}%)`;
+    const hue = 80 + (120 - 80) * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
   } else {
     const t = (value - median) / (max - median || 1);
-    const lightness = 80 - 25 * t;
-    color = `hsl(0, 70%, ${lightness}%)`;
+    const hue = 50 - 50 * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
   }
   setCellColor(td, color);
 }
@@ -1359,20 +1414,21 @@ function applyScheduleColor(td, value, summary) {
   }
 }
 
-// Move: 1/2/3 green shades, -1/-2/-3 red shades
-function applyMoveColor(td, move) {
-  if (!Number.isFinite(move) || move === 0) return;
-
-  let color;
-  if (move > 0) {
-    const level = Math.min(move, 3);
-    const lightness = 80 - (level - 1) * 10;
-    color = `hsl(120, 70%, ${lightness}%)`;
-  } else {
-    const level = Math.min(-move, 3);
-    const lightness = 80 - (level - 1) * 10;
-    color = `hsl(0, 70%, ${lightness}%)`;
+function setMoveCell(td, move) {
+  if (!Number.isFinite(move) || move === 0) {
+    td.textContent = '';
+    return;
   }
+  const dirUp = move > 0;
+  const magnitude = Math.abs(move);
+  const arrow = dirUp ? '↑' : '↓';
+  td.textContent = `${arrow} ${magnitude}`;
+
+  const capped = Math.min(magnitude, 3);
+  const lightness = 80 - (capped - 1) * 10;
+  const color = dirUp
+    ? `hsl(120, 70%, ${lightness}%)`
+    : `hsl(0, 70%, ${lightness}%)`;
   setCellColor(td, color);
 }
 
@@ -1383,9 +1439,9 @@ function applyByeColor(td, byeWeek) {
   if (!Number.isFinite(currentWeek)) return;
 
   if (byeWeek === currentWeek) {
-    td.textContent = `❌ ${byeWeek}`;
+    td.innerHTML = `<span style="color:#E74C3C;">❌</span> ${byeWeek}`;
   } else if (byeWeek < currentWeek) {
-    td.textContent = `✔ ${byeWeek}`;
+    td.innerHTML = `<span style="color:#00D26A;">✔</span> ${byeWeek}`;
   } else {
     td.textContent = String(byeWeek);
   }
