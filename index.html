@@ -5,8 +5,6 @@
   <title>Fantasy Dashboard | Sleeper Helper</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="styles.css">
-  <!-- Papa Parse for CSV parsing (still available if needed elsewhere) -->
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -16,7 +14,7 @@
         <div class="logo-circle">FF</div>
         <div class="logo-text">
           <div class="logo-title">Fantasy Dashboard</div>
-          <div class="logo-subtitle">Powered by Sleeper and custom ranks</div>
+          <div class="logo-subtitle">Powered by Sleeper + custom ranks</div>
         </div>
       </div>
       <div class="header-meta">
@@ -29,7 +27,6 @@
       <div class="control-group">
         <label class="control-label">League</label>
         <div class="league-row">
-          <!-- ID updated to match app.js: league-select -->
           <select id="league-select" class="select-input">
             <option value="">Loading leagues...</option>
           </select>
@@ -39,7 +36,6 @@
 
       <div class="control-group">
         <label class="control-label">Rest of Season CSV</label>
-        <!-- ID updated to match app.js: ros-file-input -->
         <input type="file" id="ros-file-input" accept=".csv" class="file-input">
         <div class="hint">
           Headers: Overall, Player, Position, Positional Rank, Tier, Team, ROS, Next 4, PPG, Bye
@@ -48,10 +44,9 @@
 
       <div class="control-group">
         <label class="control-label">This Week CSV</label>
-        <!-- ID updated to match app.js: week-file-input -->
         <input type="file" id="week-file-input" accept=".csv" class="file-input">
         <div class="hint">
-          Wide layout row with Rank + QB/RB/WR/TE/Defense/FLEX segments.
+          Wide layout row with Rank + QB/RB/WR/TE/DST/FLEX segments.
         </div>
       </div>
     </section>
@@ -94,7 +89,7 @@
         <div class="card" id="upgradeCard" style="display:none;">
           <div class="card-header">
             <div class="card-title">Top free agents available</div>
-            <div class="card-subtitle">Best unowned players in this league based on your ROS ranks</div>
+            <div class="card-subtitle">Best unowned players in this league based on your ROS ranks.</div>
           </div>
           <div class="card-body">
             <div id="upgradeContent" class="table-section"></div>
@@ -140,7 +135,7 @@
           <div class="card-header">
             <div class="card-title">Rest of Season big board</div>
             <div class="card-subtitle">
-              Overall ranks with movement, schedule strength, and bye status. Rows highlight your players and free agents.
+              Overall ranks with schedule strength and bye status. Rows highlight your players and free agents.
             </div>
           </div>
           <div class="card-body" id="rosContent">
@@ -158,26 +153,22 @@
             <div>
               <div class="card-title">Power Rankings</div>
               <div class="card-subtitle">
-                Combined view of ROS strength, league standings, and all-play performance over the last 3 weeks.
+                Combined view of scoring, standings, schedule, and ROS lineup strength.
               </div>
             </div>
-            <!-- This button is used to enter Presentation Mode -->
             <button id="power-presentation-toggle" class="btn btn-primary">Presentation Mode</button>
           </div>
           <div class="card-body">
-            <!-- Admin config panel for colors/logos -->
             <div class="card-subsection">
               <div class="card-subtitle">League appearance settings</div>
               <div id="admin-league-config" class="admin-panel"></div>
               <button id="admin-save-config" class="btn btn-secondary">Save League Settings</button>
             </div>
 
-            <!-- Table container: horizontally scrollable, contains the power rankings table -->
             <div id="power-rankings-table-container" class="table-section table-scroll-x">
               <table id="power-rankings-table" class="data-table"></table>
             </div>
 
-            <!-- Presentation overlay, initially hidden; app.js toggles .active -->
             <div id="power-presentation-overlay" class="power-presentation hidden"></div>
           </div>
         </div>
