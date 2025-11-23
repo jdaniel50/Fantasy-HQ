@@ -2,7 +2,17 @@
 
 // CONFIG
 const SLEEPER_USERNAME = 'stuckabuc';
-const LEAGUE_IDS = ['1186844188245356544', '1186825886808555520'];
+const LEAGUE_IDS = [
+  '1186844188245356544', // League of Record
+  '1186825886808555520', // Dynasty Champs
+  '1257084943821967360'  // FFL
+];
+
+const LEAGUE_LOGOS = {
+  '1186844188245356544': 'assets/league-of-record.png',
+  '1186825886808555520': 'assets/dynasty-champs.png',
+  '1257084943821967360': 'assets/ffl.png'
+};
 
 // STATE
 let sleeperState = null;
@@ -25,13 +35,22 @@ const upgradeCard = document.getElementById('upgradeCard');
 const upgradeContent = document.getElementById('upgradeContent');
 const weekContent = document.getElementById('weekContent');
 const rosContent = document.getElementById('rosContent');
-const powerContent = document.getElementById('powerContent');
 const currentSeasonLabel = document.getElementById('currentSeasonLabel');
 const currentWeekLabel = document.getElementById('currentWeekLabel');
 const weekPositionSelect = document.getElementById('weekPositionSelect');
 const refreshSleeperBtn = document.getElementById('refreshSleeperBtn');
 
+const powerTableContainer = document.getElementById('powerTableContainer');
+const powerPresentationContainer = document.getElementById('powerPresentationContainer');
+const powerPresentationBtn = document.getElementById('powerPresentationBtn');
+
 let controlsInitialized = false;
+
+// Power rankings state
+let lastPowerRows = [];
+let powerRevealOrder = [];
+let powerPresentationActive = false;
+let powerPresentationStep = -1;
 
 // INIT
 
@@ -127,6 +146,19 @@ function initControls() {
   if (refreshSleeperBtn) {
     refreshSleeperBtn.addEventListener('click', async () => {
       await refreshSleeperData();
+    });
+  }
+
+  if (powerPresentationBtn) {
+    powerPresentationBtn.addEventListener('click', () => {
+      if (!lastPowerRows.length) {
+        // If we don't have power data yet, try to render first
+        renderPowerTab().then(() => {
+          if (lastPowerRows.length) enterPowerPresentationMode();
+        }).catch(() => {});
+      } else {
+        enterPowerPresentationMode();
+      }
     });
   }
 
@@ -641,11 +673,11 @@ function populateTeamSelect() {
 
   const { rosters, users } = league;
 
-  const usersById = new Map();
-  users.forEach(u => usersById.set(u.user_id, u));
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
 
   const teams = rosters.map(r => {
-    const ownerUser = usersById.get(r.owner_id);
+    const ownerUser = usersByIdMap.get(r.owner_id);
     const displayName =
       ownerUser?.metadata?.team_name ||
       ownerUser?.display_name ||
@@ -1211,31 +1243,31 @@ function renderRosTab() {
 // POWER RANKINGS TAB
 
 async function renderPowerTab() {
-  if (!powerContent) return;
+  if (!powerTableContainer) return;
 
   if (!activeLeagueId) {
-    powerContent.innerHTML = '<div class="muted-text">Select a league to view power rankings.</div>';
+    powerTableContainer.innerHTML = '<div class="muted-text">Select a league to view power rankings.</div>';
     return;
   }
 
   if (!rosData.length) {
-    powerContent.innerHTML = '<div class="muted-text">Upload your ROS CSV to generate power rankings.</div>';
+    powerTableContainer.innerHTML = '<div class="muted-text">Upload your ROS CSV to generate power rankings.</div>';
     return;
   }
 
   const league = leaguesMap.get(activeLeagueId);
   if (!league) {
-    powerContent.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    powerTableContainer.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
     return;
   }
 
-  powerContent.innerHTML = '<div class="muted-text">Calculating power rankings...</div>';
+  powerTableContainer.innerHTML = '<div class="muted-text">Calculating power rankings...</div>';
 
   try {
     const powerRows = await computePowerRankingsForLeague(activeLeagueId);
 
     if (!powerRows || !powerRows.length) {
-      powerContent.innerHTML = '<div class="muted-text">Not enough data to compute power rankings.</div>';
+      powerTableContainer.innerHTML = '<div class="muted-text">Not enough data to compute power rankings.</div>';
       return;
     }
 
@@ -1278,8 +1310,8 @@ async function renderPowerTab() {
       console.warn('Error storing power ranks', e);
     }
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'table-section';
+    lastPowerRows = powerRows;
+    powerRevealOrder = [...powerRows].sort((a, b) => b.rank - a.rank); // worst to best for reveal
 
     const table = document.createElement('table');
     table.className = 'table power-table';
@@ -1292,23 +1324,32 @@ async function renderPowerTab() {
         <th>Change</th>
         <th>Standing</th>
         <th>All-Play</th>
+        <th>Notes</th>
       </tr>
     `;
     table.appendChild(thead);
 
     const tbody = document.createElement('tbody');
 
-    const numTeams = powerRows.length;
+    const notesMap = loadPowerNotes(activeLeagueId);
+
     powerRows.forEach(row => {
       const tr = document.createElement('tr');
 
+      const colorMeta = getTeamColorMeta(row.teamName);
+
       const tdRank = document.createElement('td');
       tdRank.textContent = row.rank;
-      applyPowerRankColor(tdRank, row.rank, numTeams);
+      tdRank.classList.add('power-rank-cell');
+      tdRank.style.background = colorMeta.gradient;
+      tdRank.style.color = '#ffffff';
       tr.appendChild(tdRank);
 
       const tdTeam = document.createElement('td');
       tdTeam.textContent = row.teamName;
+      tdTeam.classList.add('power-team-cell');
+      tdTeam.style.background = colorMeta.gradient;
+      tdTeam.style.color = '#ffffff';
       tr.appendChild(tdTeam);
 
       const tdChange = document.createElement('td');
@@ -1331,19 +1372,206 @@ async function renderPowerTab() {
       tdAllPlay.textContent = row.allPlayRank ?? '';
       tr.appendChild(tdAllPlay);
 
+      const tdNotes = document.createElement('td');
+      const noteKey = String(row.roster_id);
+      const textarea = document.createElement('textarea');
+      textarea.className = 'power-note-input';
+      textarea.value = notesMap[noteKey] || '';
+      textarea.dataset.rosterId = noteKey;
+      textarea.addEventListener('input', () => {
+        notesMap[noteKey] = textarea.value;
+        savePowerNotes(activeLeagueId, notesMap);
+      });
+      tdNotes.appendChild(textarea);
+      tr.appendChild(tdNotes);
+
       tbody.appendChild(tr);
     });
 
     table.appendChild(tbody);
-    wrapper.appendChild(table);
 
-    powerContent.innerHTML = '';
-    powerContent.appendChild(wrapper);
+    powerTableContainer.innerHTML = '';
+    powerTableContainer.appendChild(table);
   } catch (e) {
     console.error(e);
-    powerContent.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
+    powerTableContainer.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
   }
 }
+
+// POWER NOTES STORAGE
+
+function loadPowerNotes(leagueId) {
+  try {
+    const raw = localStorage.getItem(`fantasy_power_notes_${leagueId}`);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePowerNotes(leagueId, notesObj) {
+  try {
+    localStorage.setItem(`fantasy_power_notes_${leagueId}`, JSON.stringify(notesObj));
+  } catch (e) {
+    console.warn('Unable to store power notes', e);
+  }
+}
+
+// PRESENTATION MODE
+
+function enterPowerPresentationMode() {
+  if (!lastPowerRows.length) return;
+
+  powerPresentationActive = true;
+  powerPresentationStep = -1;
+
+  if (powerTableContainer) powerTableContainer.classList.add('hidden');
+  if (powerPresentationContainer) powerPresentationContainer.classList.remove('hidden');
+
+  powerPresentationContainer.innerHTML = `
+    <div class="presentation-inner">
+      <div id="powerSlides" class="presentation-slides"></div>
+      <button id="powerNextBtn" class="btn btn-primary presentation-next-btn">Next</button>
+    </div>
+  `;
+
+  const nextBtn = document.getElementById('powerNextBtn');
+  const slides = document.getElementById('powerSlides');
+
+  nextBtn.addEventListener('click', () => {
+    handlePowerNext(slides, nextBtn);
+  });
+}
+
+function exitPowerPresentationMode() {
+  powerPresentationActive = false;
+  powerPresentationStep = -1;
+  if (powerPresentationContainer) {
+    powerPresentationContainer.classList.add('hidden');
+    powerPresentationContainer.innerHTML = '';
+  }
+  if (powerTableContainer) powerTableContainer.classList.remove('hidden');
+}
+
+function handlePowerNext(slidesContainer, nextBtn) {
+  if (!slidesContainer) return;
+
+  const totalTeams = powerRevealOrder.length;
+
+  if (powerPresentationStep === -1) {
+    // Intro slide
+    const intro = document.createElement('div');
+    intro.className = 'presentation-slide presentation-intro';
+
+    const logoSrc = LEAGUE_LOGOS[activeLeagueId];
+    if (logoSrc) {
+      const img = document.createElement('img');
+      img.src = logoSrc;
+      img.alt = 'League logo';
+      img.className = 'presentation-logo';
+      intro.appendChild(img);
+    }
+
+    const title = document.createElement('div');
+    title.className = 'presentation-title';
+    title.textContent = 'Week ' + (sleeperState?.week ?? '') + ' Power Rankings';
+    intro.appendChild(title);
+
+    slidesContainer.appendChild(intro);
+
+    powerPresentationStep = 0;
+    return;
+  }
+
+  if (powerPresentationStep < totalTeams) {
+    const row = powerRevealOrder[powerPresentationStep];
+
+    const slide = document.createElement('div');
+    slide.className = 'presentation-slide';
+
+    const header = document.createElement('div');
+    header.className = 'presentation-team-header';
+
+    const rankEl = document.createElement('div');
+    rankEl.className = 'presentation-team-rank';
+    rankEl.textContent = row.rank;
+    header.appendChild(rankEl);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'presentation-team-name';
+    nameEl.textContent = row.teamName;
+    header.appendChild(nameEl);
+
+    slide.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'presentation-team-meta';
+    const changeText = (!Number.isFinite(row.change) || row.change === 0)
+      ? 'No change'
+      : row.change > 0
+        ? `Up ${row.change}`
+        : `Down ${Math.abs(row.change)}`;
+    meta.textContent = `Standing: ${row.standingRank} • All-Play: ${row.allPlayRank} • ${changeText}`;
+    slide.appendChild(meta);
+
+    const notesObj = loadPowerNotes(activeLeagueId);
+    const notesKey = String(row.roster_id);
+    const noteText = notesObj[notesKey] || '';
+
+    if (noteText) {
+      const notesLabel = document.createElement('div');
+      notesLabel.className = 'presentation-notes-label';
+      notesLabel.textContent = 'Notes';
+      slide.appendChild(notesLabel);
+
+      const notesBody = document.createElement('div');
+      notesBody.className = 'presentation-notes-text';
+      notesBody.textContent = noteText;
+      slide.appendChild(notesBody);
+    }
+
+    const colorMeta = getTeamColorMeta(row.teamName);
+    slide.style.background = `linear-gradient(135deg, ${colorMeta.headerDark}, ${colorMeta.headerLight})`;
+
+    // Insert at top so higher-ranked teams stack above
+    slidesContainer.insertBefore(slide, slidesContainer.children[1] || null);
+
+    powerPresentationStep += 1;
+
+    if (powerPresentationStep === totalTeams) {
+      nextBtn.textContent = 'Exit Presentation Mode';
+    }
+
+    return;
+  }
+
+  // Exiting
+  exitPowerPresentationMode();
+}
+
+// TEAM COLOR FROM NAME
+
+function getTeamColorMeta(name) {
+  const baseHue = hashStringToHue(name || '');
+  const headerDark = `hsl(${baseHue}, 70%, 24%)`;
+  const headerLight = `hsl(${baseHue}, 70%, 40%)`;
+  const gradient = `linear-gradient(90deg, ${headerDark} 0%, ${headerLight} 50%, transparent 100%)`;
+  return { headerDark, headerLight, gradient };
+}
+
+function hashStringToHue(str) {
+  let hash = 0;
+  const s = str || 'team';
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) | 0;
+  }
+  const hue = (hash % 360 + 360) % 360;
+  return hue;
+}
+
+// POWER RANKINGS CALC
 
 async function computePowerRankingsForLeague(leagueId) {
   const league = leaguesMap.get(leagueId);
@@ -1352,11 +1580,11 @@ async function computePowerRankingsForLeague(leagueId) {
   const { rosters, users } = league;
   if (!rosters || !rosters.length) return [];
 
-  const usersById = new Map();
-  users.forEach(u => usersById.set(u.user_id, u));
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
 
   const teamInfos = rosters.map(r => {
-    const ownerUser = usersById.get(r.owner_id);
+    const ownerUser = usersByIdMap.get(r.owner_id);
     const displayName =
       ownerUser?.metadata?.team_name ||
       ownerUser?.display_name ||
@@ -1377,12 +1605,11 @@ async function computePowerRankingsForLeague(leagueId) {
   const rosRankByRoster = new Map();
   const sortedRos = [...rosScores.entries()].sort((a, b) => a[1] - b[1]);
   let rosRankCounter = 1;
-  sortedRos.forEach(([rid, score]) => {
+  sortedRos.forEach(([rid]) => {
     rosRankByRoster.set(rid, rosRankCounter++);
   });
 
   const standingRanks = computeStandingRanks(league);
-
   const allPlayRanks = await computeAllPlayRanks(leagueId, league);
 
   const numTeams = rosters.length;
@@ -1537,11 +1764,11 @@ async function computeAllPlayRanks(leagueId, league) {
 function buildOwnershipContext(league) {
   const { rosters, users } = league;
 
-  const usersById = new Map();
-  users.forEach(u => usersById.set(u.user_id, u));
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
 
   const teams = rosters.map(r => {
-    const ownerUser = usersById.get(r.owner_id);
+    const ownerUser = usersByIdMap.get(r.owner_id);
     const displayName =
       ownerUser?.metadata?.team_name ||
       ownerUser?.display_name ||
@@ -1636,32 +1863,6 @@ function applyOverallRankColor(td, rank) {
     const hue = 60 - 60 * t;
     color = `hsl(${hue}, 70%, 45%)`;
   }
-  setCellColor(td, color);
-}
-
-// Power rank gradient for teams: 1..N
-function applyPowerRankColor(td, rank, totalTeams) {
-  if (!Number.isFinite(rank) || !Number.isFinite(totalTeams) || totalTeams <= 1) return;
-
-  const minRank = 1;
-  const maxRank = totalTeams;
-  const midRank = (minRank + maxRank) / 2;
-
-  let color;
-  if (rank === minRank) {
-    color = 'hsl(120, 70%, 40%)';
-  } else if (rank === maxRank) {
-    color = 'hsl(0, 70%, 50%)';
-  } else if (rank <= midRank) {
-    const t = (rank - minRank) / (midRank - minRank || 1);
-    const hue = 120 - (120 - 50) * t;
-    color = `hsl(${hue}, 70%, 45%)`;
-  } else {
-    const t = (rank - midRank) / (maxRank - midRank || 1);
-    const hue = 50 - 50 * t;
-    color = `hsl(${hue}, 70%, 45%)`;
-  }
-
   setCellColor(td, color);
 }
 
