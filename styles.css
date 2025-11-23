@@ -37,6 +37,10 @@ body {
   align-items: stretch;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .app-shell {
   width: 100%;
   max-width: 1280px;
@@ -176,6 +180,17 @@ body {
 
 .btn-secondary:hover {
   background: #2e3344;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #1b1607;
+  font-weight: 600;
+  border: 1px solid #f9d26e;
+}
+
+.btn-primary:hover {
+  background: #ffd76a;
 }
 
 /* TABS */
@@ -446,11 +461,11 @@ body {
   min-width: 70px;
 }
 
-/* POWER TABLE: Rank | Team | Change | Standing | All-Play */
+/* POWER TABLE: Rank | Team | Change | Standing | All-Play | Notes */
 
 .power-table th:nth-child(1),
 .power-table td:nth-child(1) {
-  min-width: 50px;
+  min-width: 30px;
 }
 
 .power-table th:nth-child(2),
@@ -465,6 +480,159 @@ body {
 .power-table th:nth-child(5),
 .power-table td:nth-child(5) {
   min-width: 70px;
+}
+
+.power-table th:nth-child(6),
+.power-table td:nth-child(6) {
+  min-width: 220px;
+}
+
+/* Power table rank+team gradient helpers */
+
+.power-rank-cell,
+.power-team-cell {
+  border-bottom: 1px solid #25293a;
+}
+
+.power-team-cell {
+  border-left: none;
+}
+
+/* NOTES INPUT */
+
+.power-note-input {
+  width: 100%;
+  min-height: 30px;
+  max-height: 70px;
+  resize: vertical;
+  background: #151823;
+  border-radius: 8px;
+  border: 1px solid #30354a;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 6px;
+  outline: none;
+}
+
+.power-note-input:focus {
+  border-color: var(--accent);
+}
+
+/* POWER HEADER ROW */
+
+.power-header-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+/* PRESENTATION MODE */
+
+.power-presentation {
+  position: relative;
+  margin-top: 10px;
+}
+
+.presentation-inner {
+  min-height: 360px;
+  padding: 20px 10px 70px;
+}
+
+.presentation-slides {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.presentation-slide {
+  background: radial-gradient(circle at top, #1a1f33, #060710);
+  border-radius: 18px;
+  border: 1px solid #2f3548;
+  padding: 18px 20px;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6);
+  animation: slide-in-left 0.45s ease-out;
+}
+
+.presentation-intro {
+  text-align: center;
+  padding: 40px 20px 50px;
+}
+
+.presentation-logo {
+  max-width: 260px;
+  height: auto;
+  margin-bottom: 22px;
+}
+
+.presentation-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.presentation-subtitle {
+  font-size: 16px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
+.presentation-team-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.presentation-team-rank {
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.presentation-team-name {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.presentation-team-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.presentation-notes-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.presentation-notes-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.presentation-next-btn {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1000;
+}
+
+/* ANIMATIONS */
+
+@keyframes slide-in-left {
+  0% {
+    opacity: 0;
+    transform: translateX(-32px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* RESPONSIVE */
@@ -484,5 +652,13 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
+  }
+
+  .presentation-slide {
+    padding: 14px 14px;
+  }
+
+  .presentation-logo {
+    max-width: 200px;
   }
 }
