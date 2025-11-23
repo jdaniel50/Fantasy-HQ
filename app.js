@@ -1286,11 +1286,14 @@ async function renderPowerTab() {
       console.warn('Error reading previous power ranks', e);
     }
 
+    // Sort by final powerScore and assign rank
     powerRows.sort((a, b) => a.powerScore - b.powerScore);
     powerRows.forEach((row, idx) => {
       row.rank = idx + 1;
     });
 
+    // Compute change and summaries
+    const numTeams = powerRows.length;
     powerRows.forEach(row => {
       const prevRank = prevMap.get(row.roster_id);
       if (Number.isFinite(prevRank)) {
@@ -1298,6 +1301,7 @@ async function renderPowerTab() {
       } else {
         row.change = null;
       }
+      row.summary = buildPowerSummary(row, numTeams);
     });
 
     try {
@@ -1321,14 +1325,15 @@ async function renderPowerTab() {
         <th>Change</th>
         <th>Standing</th>
         <th>All-Play</th>
-        <th>Notes</th>
+        <th>ROS</th>
+        <th>Schedule</th>
+        <th>Stars</th>
+        <th>Summary</th>
       </tr>
     `;
     table.appendChild(thead);
 
     const tbody = document.createElement('tbody');
-
-    const notesMap = loadPowerNotes(activeLeagueId);
 
     powerRows.forEach(row => {
       const tr = document.createElement('tr');
@@ -1367,18 +1372,22 @@ async function renderPowerTab() {
       tdAllPlay.textContent = row.allPlayRank ?? '';
       tr.appendChild(tdAllPlay);
 
-      const tdNotes = document.createElement('td');
-      const noteKey = String(row.roster_id);
-      const textarea = document.createElement('textarea');
-      textarea.className = 'power-note-input';
-      textarea.value = notesMap[noteKey] || '';
-      textarea.dataset.rosterId = noteKey;
-      textarea.addEventListener('input', () => {
-        notesMap[noteKey] = textarea.value;
-        savePowerNotes(activeLeagueId, notesMap);
-      });
-      tdNotes.appendChild(textarea);
-      tr.appendChild(tdNotes);
+      const tdRos = document.createElement('td');
+      tdRos.textContent = row.rosRank ?? '';
+      tr.appendChild(tdRos);
+
+      const tdSchedule = document.createElement('td');
+      tdSchedule.textContent = row.scheduleRank ?? '';
+      tr.appendChild(tdSchedule);
+
+      const tdStars = document.createElement('td');
+      tdStars.textContent =
+        `SO ${starsToGlyph(row.scoringStars)} | Sch ${starsToGlyph(row.scheduleStars)} | St ${starsToGlyph(row.standingStars)} | Form ${starsToGlyph(row.allPlayStars)}`;
+      tr.appendChild(tdStars);
+
+      const tdSummary = document.createElement('td');
+      tdSummary.textContent = row.summary || '';
+      tr.appendChild(tdSummary);
 
       tbody.appendChild(tr);
     });
@@ -1394,27 +1403,6 @@ async function renderPowerTab() {
   } catch (e) {
     console.error(e);
     powerTableContainer.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
-  }
-}
-
-// POWER NOTES STORAGE
-
-function loadPowerNotes(leagueId) {
-  try {
-    const raw = localStorage.getItem(`fantasy_power_notes_${leagueId}`);
-    if (!raw) return {};
-    const obj = JSON.parse(raw);
-    return obj && typeof obj === 'object' ? obj : {};
-  } catch {
-    return {};
-  }
-}
-
-function savePowerNotes(leagueId, notesObj) {
-  try {
-    localStorage.setItem(`fantasy_power_notes_${leagueId}`, JSON.stringify(notesObj));
-  } catch (e) {
-    console.warn('Unable to store power notes', e);
   }
 }
 
@@ -1699,19 +1687,25 @@ function handlePowerNext(slidesContainer, nextBtn) {
     meta.textContent = `Standing: ${row.standingRank} • All-Play: ${row.allPlayRank} • ${changeText}`;
     slide.appendChild(meta);
 
-    const notesObj = loadPowerNotes(activeLeagueId);
-    const notesKey = String(row.roster_id);
-    const noteText = notesObj[notesKey] || '';
+    const starsBlock = document.createElement('div');
+    starsBlock.className = 'presentation-stars-block';
+    starsBlock.innerHTML = `
+      <div>Scoring Output: ${starsToGlyph(row.scoringStars)}</div>
+      <div>Schedule Outlook: ${starsToGlyph(row.scheduleStars)}</div>
+      <div>Standing Strength: ${starsToGlyph(row.standingStars)}</div>
+      <div>Recent Form (All-Play): ${starsToGlyph(row.allPlayStars)}</div>
+    `;
+    slide.appendChild(starsBlock);
 
-    if (noteText) {
+    if (row.summary) {
       const notesLabel = document.createElement('div');
       notesLabel.className = 'presentation-notes-label';
-      notesLabel.textContent = 'Notes';
+      notesLabel.textContent = 'Summary';
       slide.appendChild(notesLabel);
 
       const notesBody = document.createElement('div');
       notesBody.className = 'presentation-notes-text';
-      notesBody.textContent = noteText;
+      notesBody.textContent = row.summary;
       slide.appendChild(notesBody);
     }
 
@@ -1810,9 +1804,13 @@ async function computePowerRankingsForLeague(leagueId) {
     };
   });
 
+  // ROS + schedule scores based on top 8 players (combined ROS/Next 4)
   const rosScores = new Map();
+  const scheduleScores = new Map();
   rosters.forEach(r => {
-    rosScores.set(r.roster_id, calcTeamRosScore(r));
+    const { rosScore, scheduleScore } = calcTeamRosAndScheduleScore(r);
+    rosScores.set(r.roster_id, rosScore);
+    scheduleScores.set(r.roster_id, scheduleScore);
   });
 
   const rosRankByRoster = new Map();
@@ -1822,8 +1820,16 @@ async function computePowerRankingsForLeague(leagueId) {
     rosRankByRoster.set(rid, rosRankCounter++);
   });
 
+  const scheduleRankByRoster = new Map();
+  const sortedSched = [...scheduleScores.entries()].sort((a, b) => a[1] - b[1]); // lower scheduleScore = easier
+  let schedRankCounter = 1;
+  sortedSched.forEach(([rid]) => {
+    scheduleRankByRoster.set(rid, schedRankCounter++);
+  });
+
   const standingRanks = computeStandingRanks(league);
   const allPlayRanks = await computeAllPlayRanks(leagueId, league);
+  const pointsForRanks = computePointsForRanks(league);
 
   const numTeams = rosters.length;
   const results = [];
@@ -1833,15 +1839,33 @@ async function computePowerRankingsForLeague(leagueId) {
     const rosRank = rosRankByRoster.get(rid) ?? numTeams;
     const standingRank = standingRanks.get(rid) ?? numTeams;
     const allPlayRank = allPlayRanks.get(rid) ?? Math.ceil(numTeams / 2);
+    const scheduleRank = scheduleRankByRoster.get(rid) ?? Math.ceil(numTeams / 2);
+    const pointsRank = pointsForRanks.get(rid) ?? Math.ceil(numTeams / 2);
 
+    const scoringRank = Math.round((rosRank + pointsRank) / 2);
+    const scoringStars = rankToStars(scoringRank, numTeams);
+    const scheduleStars = rankToStars(scheduleRank, numTeams);
+    const standingStars = rankToStars(standingRank, numTeams);
+    const allPlayStars = rankToStars(allPlayRank, numTeams);
+
+    // Main power score (lower is better)
     const powerScore = 0.4 * rosRank + 0.3 * standingRank + 0.3 * allPlayRank;
 
     results.push({
       roster_id: rid,
       teamName: info.displayName,
       rosRank,
+      scheduleRank,
       standingRank,
       allPlayRank,
+      scoringRank,
+      pointsRank,
+      rosScore: rosScores.get(rid),
+      scheduleScore: scheduleScores.get(rid),
+      scoringStars,
+      scheduleStars,
+      standingStars,
+      allPlayStars,
       powerScore
     });
   });
@@ -1849,32 +1873,55 @@ async function computePowerRankingsForLeague(leagueId) {
   return results;
 }
 
-function calcTeamRosScore(roster) {
+// Calculate top-8 ROS rank and combined schedule score
+function calcTeamRosAndScheduleScore(roster) {
   const allIds = new Set([
     ...(roster.players || []),
     ...(roster.taxi || []),
     ...(roster.reserve || [])
   ]);
 
-  const ranks = [];
+  const rows = [];
   allIds.forEach(pid => {
     const p = playersById[pid];
     if (!p) return;
     const name = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
     if (!name) return;
     const row = rosByName.get(name.toLowerCase());
-    if (row && Number.isFinite(row.rank)) {
-      ranks.push(row.rank);
-    }
+    if (!row || !Number.isFinite(row.rank)) return;
+    rows.push(row);
   });
 
-  if (!ranks.length) return Infinity;
+  if (!rows.length) {
+    return { rosScore: Infinity, scheduleScore: Infinity };
+  }
 
-  ranks.sort((a, b) => a - b);
-  const limit = Math.min(8, ranks.length);
-  const slice = ranks.slice(0, limit);
-  const avg = slice.reduce((sum, x) => sum + x, 0) / limit;
-  return avg;
+  rows.sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999));
+  const limit = Math.min(8, rows.length);
+  const top = rows.slice(0, limit);
+
+  const avgRosRank = top.reduce((sum, r) => sum + (r.rank ?? 9999), 0) / limit;
+
+  const schedVals = [];
+  top.forEach(r => {
+    if (Number.isFinite(r.ros)) schedVals.push(r.ros);
+    if (Number.isFinite(r.next4)) schedVals.push(r.next4);
+  });
+
+  let scheduleScore;
+  if (!schedVals.length) {
+    scheduleScore = 16; // middle-of-the-road
+  } else {
+    scheduleScore = schedVals.reduce((s, v) => s + v, 0) / schedVals.length;
+  }
+
+  return { rosScore: avgRosRank, scheduleScore };
+}
+
+// Legacy helper kept for compatibility if needed
+function calcTeamRosScore(roster) {
+  const { rosScore } = calcTeamRosAndScheduleScore(roster);
+  return rosScore;
 }
 
 function computeStandingRanks(league) {
@@ -1901,6 +1948,28 @@ function computeStandingRanks(league) {
     if (a.points !== b.points) return b.points - a.points;
     return a.roster_id - b.roster_id;
   });
+
+  const map = new Map();
+  arr.forEach((entry, idx) => {
+    map.set(entry.roster_id, idx + 1);
+  });
+  return map;
+}
+
+function computePointsForRanks(league) {
+  const { rosters } = league;
+  const arr = rosters.map(r => {
+    const s = r.settings || {};
+    const fpts = Number(s.fpts ?? 0);
+    const fptsDec = Number(s.fpts_decimal ?? 0);
+    const points = fpts + fptsDec / 100;
+    return {
+      roster_id: r.roster_id,
+      points
+    };
+  });
+
+  arr.sort((a, b) => b.points - a.points);
 
   const map = new Map();
   arr.forEach((entry, idx) => {
@@ -2208,4 +2277,57 @@ function applyByeColor(td, byeWeek) {
   } else {
     td.textContent = String(byeWeek);
   }
+}
+
+// Power helpers
+
+function rankToStars(rank, numTeams) {
+  if (!Number.isFinite(rank) || !numTeams) return 3;
+  const pct = rank / numTeams;
+  if (pct <= 0.2) return 5;
+  if (pct <= 0.4) return 4;
+  if (pct <= 0.6) return 3;
+  if (pct <= 0.8) return 2;
+  return 1;
+}
+
+function starsToGlyph(n) {
+  const clamped = Math.max(1, Math.min(5, n || 3));
+  const full = '★'.repeat(clamped);
+  const empty = '☆'.repeat(5 - clamped);
+  return full + empty;
+}
+
+function buildPowerSummary(row, numTeams) {
+  const parts = [];
+
+  if (row.scoringStars >= 4) {
+    parts.push('Strong scoring profile with top-tier roster talent.');
+  } else if (row.scoringStars <= 2) {
+    parts.push('Limited scoring ceiling compared to the league leaders.');
+  }
+
+  if (row.scheduleStars >= 4) {
+    parts.push('Favorable schedule ahead should help maintain or improve this spot.');
+  } else if (row.scheduleStars <= 2) {
+    parts.push('Challenging schedule could make it harder to climb the standings.');
+  }
+
+  if (row.standingRank <= 3) {
+    parts.push('Current record reflects a clear contender.');
+  } else if (row.standingRank >= numTeams - 1) {
+    parts.push('Needs wins soon to stay in the playoff hunt.');
+  }
+
+  if (row.allPlayStars >= 4) {
+    parts.push('Recent form has been strong based on all-play results.');
+  } else if (row.allPlayStars <= 2) {
+    parts.push('Recent all-play results show some inconsistency.');
+  }
+
+  if (!parts.length) {
+    return 'Solid middle-of-the-pack profile with room to move in either direction.';
+  }
+
+  return parts.join(' ');
 }
