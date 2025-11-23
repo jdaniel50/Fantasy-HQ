@@ -446,6 +446,27 @@ body {
   min-width: 70px;
 }
 
+/* POWER TABLE: Rank | Team | Change | Standing | All-Play */
+
+.power-table th:nth-child(1),
+.power-table td:nth-child(1) {
+  min-width: 50px;
+}
+
+.power-table th:nth-child(2),
+.power-table td:nth-child(2) {
+  min-width: 220px;
+}
+
+.power-table th:nth-child(3),
+.power-table td:nth-child(3),
+.power-table th:nth-child(4),
+.power-table td:nth-child(4),
+.power-table th:nth-child(5),
+.power-table td:nth-child(5) {
+  min-width: 70px;
+}
+
 /* RESPONSIVE */
 
 @media (max-width: 900px) {
