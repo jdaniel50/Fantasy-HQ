@@ -461,7 +461,7 @@ body {
   min-width: 70px;
 }
 
-/* POWER TABLE: Rank | Team | Change | Standing | All-Play | Notes */
+/* POWER TABLE: Rank | Team | Change | Standing | All-Play | ROS | Schedule | Stars | Summary */
 
 .power-table th:nth-child(1),
 .power-table td:nth-child(1) {
@@ -478,13 +478,22 @@ body {
 .power-table th:nth-child(4),
 .power-table td:nth-child(4),
 .power-table th:nth-child(5),
-.power-table td:nth-child(5) {
-  min-width: 70px;
+.power-table td:nth-child(5),
+.power-table th:nth-child(6),
+.power-table td:nth-child(6),
+.power-table th:nth-child(7),
+.power-table td:nth-child(7) {
+  min-width: 60px;
 }
 
-.power-table th:nth-child(6),
-.power-table td:nth-child(6) {
-  min-width: 220px;
+.power-table th:nth-child(8),
+.power-table td:nth-child(8) {
+  min-width: 260px;
+}
+
+.power-table th:nth-child(9),
+.power-table td:nth-child(9) {
+  min-width: 260px;
 }
 
 /* Power table rank+team gradient helpers */
@@ -498,7 +507,7 @@ body {
   border-left: none;
 }
 
-/* NOTES INPUT */
+/* NOTES INPUT (no longer used, but kept if needed later) */
 
 .power-note-input {
   width: 100%;
@@ -685,6 +694,13 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.presentation-stars-block {
+  margin: 10px 0 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .presentation-notes-label {
