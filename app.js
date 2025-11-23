@@ -8,12 +8,6 @@ const LEAGUE_IDS = [
   '1257084943821967360'  // FFL
 ];
 
-const LEAGUE_LOGOS = {
-  '1186844188245356544': 'assets/league-of-record.png',
-  '1186825886808555520': 'assets/dynasty-champs.png',
-  '1257084943821967360': 'assets/ffl.png'
-};
-
 // STATE
 let sleeperState = null;
 let playersById = {};
@@ -43,6 +37,8 @@ const refreshSleeperBtn = document.getElementById('refreshSleeperBtn');
 const powerTableContainer = document.getElementById('powerTableContainer');
 const powerPresentationContainer = document.getElementById('powerPresentationContainer');
 const powerPresentationBtn = document.getElementById('powerPresentationBtn');
+const powerAdminPanel = document.getElementById('powerAdminPanel');
+const powerAdminToggle = document.getElementById('powerAdminToggle');
 
 let controlsInitialized = false;
 
@@ -152,12 +148,20 @@ function initControls() {
   if (powerPresentationBtn) {
     powerPresentationBtn.addEventListener('click', () => {
       if (!lastPowerRows.length) {
-        // If we don't have power data yet, try to render first
         renderPowerTab().then(() => {
           if (lastPowerRows.length) enterPowerPresentationMode();
         }).catch(() => {});
       } else {
         enterPowerPresentationMode();
+      }
+    });
+  }
+
+  if (powerAdminToggle && powerAdminPanel) {
+    powerAdminToggle.addEventListener('click', () => {
+      const nowHidden = powerAdminPanel.classList.toggle('hidden');
+      if (!nowHidden) {
+        renderPowerAdminPanel();
       }
     });
   }
@@ -310,7 +314,6 @@ function buildWeekDataFromRows(rows) {
 
   const segments = [];
 
-  // QB
   const qbNameIdx = findIndex('Quarterback');
   if (qbNameIdx !== -1) {
     segments.push({
@@ -327,7 +330,6 @@ function buildWeekDataFromRows(rows) {
     });
   }
 
-  // RB
   const rbNameIdx = findIndex('Running Back');
   if (rbNameIdx !== -1) {
     segments.push({
@@ -344,7 +346,6 @@ function buildWeekDataFromRows(rows) {
     });
   }
 
-  // WR
   const wrNameIdx = findIndex('Wide Receiver');
   if (wrNameIdx !== -1) {
     segments.push({
@@ -361,7 +362,6 @@ function buildWeekDataFromRows(rows) {
     });
   }
 
-  // TE
   const teNameIdx = findIndex('Tight End');
   if (teNameIdx !== -1) {
     segments.push({
@@ -378,7 +378,6 @@ function buildWeekDataFromRows(rows) {
     });
   }
 
-  // Defense
   const defNameIdx = findIndex('Defense');
   if (defNameIdx !== -1) {
     segments.push({
@@ -388,14 +387,13 @@ function buildWeekDataFromRows(rows) {
       teamIdx: null,
       oppIdx: defNameIdx + 1,
       totalIdx: null,
-      matchupIdx: defNameIdx + 3, // Spread
+      matchupIdx: defNameIdx + 3,
       tierIdx: defNameIdx + 4,
       posIdx: null,
       fromFlex: false
     });
   }
 
-  // FLEX1
   const flex1NameIdx = findIndex('FLEX');
   if (flex1NameIdx !== -1) {
     segments.push({
@@ -412,7 +410,6 @@ function buildWeekDataFromRows(rows) {
     });
   }
 
-  // FLEX2
   const flex2NameIdx = flex1NameIdx !== -1 ? findIndex('FLEX', flex1NameIdx + 1) : -1;
   if (flex2NameIdx !== -1) {
     segments.push({
@@ -1311,7 +1308,7 @@ async function renderPowerTab() {
     }
 
     lastPowerRows = powerRows;
-    powerRevealOrder = [...powerRows].sort((a, b) => b.rank - a.rank); // worst to best for reveal
+    powerRevealOrder = [...powerRows].sort((a, b) => b.rank - a.rank);
 
     const table = document.createElement('table');
     table.className = 'table power-table';
@@ -1336,13 +1333,11 @@ async function renderPowerTab() {
     powerRows.forEach(row => {
       const tr = document.createElement('tr');
 
-      const colorMeta = getTeamColorMeta(row.teamName);
+      const colorMeta = getTeamColorMeta(row.teamName, activeLeagueId);
 
       const tdRank = document.createElement('td');
       tdRank.textContent = row.rank;
       tdRank.classList.add('power-rank-cell');
-      tdRank.style.background = colorMeta.gradient;
-      tdRank.style.color = '#ffffff';
       tr.appendChild(tdRank);
 
       const tdTeam = document.createElement('td');
@@ -1392,6 +1387,10 @@ async function renderPowerTab() {
 
     powerTableContainer.innerHTML = '';
     powerTableContainer.appendChild(table);
+
+    if (!powerAdminPanel.classList.contains('hidden')) {
+      renderPowerAdminPanel();
+    }
   } catch (e) {
     console.error(e);
     powerTableContainer.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
@@ -1419,6 +1418,190 @@ function savePowerNotes(leagueId, notesObj) {
   }
 }
 
+// TEAM COLORS & LOGOS STORAGE
+
+function loadTeamColors(leagueId) {
+  try {
+    const raw = localStorage.getItem(`fantasy_team_colors_${leagueId}`);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTeamColors(leagueId, colorsObj) {
+  try {
+    localStorage.setItem(`fantasy_team_colors_${leagueId}`, JSON.stringify(colorsObj));
+  } catch (e) {
+    console.warn('Unable to store team colors', e);
+  }
+}
+
+function loadLeagueLogo(leagueId) {
+  try {
+    return localStorage.getItem(`fantasy_league_logo_${leagueId}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLeagueLogo(leagueId, dataUrl) {
+  try {
+    localStorage.setItem(`fantasy_league_logo_${leagueId}`, dataUrl);
+  } catch (e) {
+    console.warn('Unable to store league logo', e);
+  }
+}
+
+// ADMIN PANEL (POWER TAB)
+
+function renderPowerAdminPanel() {
+  if (!powerAdminPanel) return;
+
+  if (!activeLeagueId) {
+    powerAdminPanel.innerHTML = '<div class="admin-panel-title">Admin</div><div class="muted-text">Select a league to edit settings.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    powerAdminPanel.innerHTML = '<div class="admin-panel-title">Admin</div><div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  const { rosters, users } = league;
+  const usersById = new Map();
+  users.forEach(u => usersById.set(u.user_id, u));
+
+  const teams = rosters.map(r => {
+    const ownerUser = usersById.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    return {
+      roster_id: r.roster_id,
+      displayName
+    };
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const colors = loadTeamColors(activeLeagueId);
+  const logoUrl = loadLeagueLogo(activeLeagueId);
+
+  const wrapper = document.createElement('div');
+
+  const title = document.createElement('div');
+  title.className = 'admin-panel-title';
+  title.textContent = 'League Settings';
+  wrapper.appendChild(title);
+
+  const logoRow = document.createElement('div');
+  logoRow.className = 'admin-logo-wrapper';
+
+  const logoPreview = document.createElement('img');
+  logoPreview.className = 'admin-logo-preview';
+  if (logoUrl) {
+    logoPreview.src = logoUrl;
+  } else {
+    logoPreview.alt = 'No logo uploaded';
+  }
+  logoRow.appendChild(logoPreview);
+
+  const logoControls = document.createElement('div');
+  const logoLabel = document.createElement('div');
+  logoLabel.style.fontSize = '11px';
+  logoLabel.style.color = 'var(--text-secondary)';
+  logoLabel.textContent = 'League Logo (used in Presentation intro)';
+  const logoInput = document.createElement('input');
+  logoInput.type = 'file';
+  logoInput.accept = 'image/*';
+  logoInput.style.fontSize = '11px';
+  logoInput.addEventListener('change', () => {
+    const file = logoInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      saveLeagueLogo(activeLeagueId, dataUrl);
+      logoPreview.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  logoControls.appendChild(logoLabel);
+  logoControls.appendChild(logoInput);
+  logoRow.appendChild(logoControls);
+  wrapper.appendChild(logoRow);
+
+  const title2 = document.createElement('div');
+  title2.className = 'admin-panel-title';
+  title2.textContent = 'Team Colors (used in Power Rankings & Presentation)';
+  wrapper.appendChild(title2);
+
+  const table = document.createElement('table');
+  table.className = 'admin-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Team</th><th>Color</th><th>Preview</th></tr>';
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  teams.forEach(team => {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = team.displayName;
+    tr.appendChild(tdName);
+
+    const tdInput = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'admin-color-input';
+    input.placeholder = '#123456';
+    input.value = colors[team.displayName] || '';
+    tdInput.appendChild(input);
+    tr.appendChild(tdInput);
+
+    const tdPreview = document.createElement('td');
+    const preview = document.createElement('div');
+    preview.className = 'admin-color-preview';
+    if (colors[team.displayName]) {
+      preview.style.background = colors[team.displayName];
+    } else {
+      preview.style.background = 'transparent';
+    }
+    tdPreview.appendChild(preview);
+    tr.appendChild(tdPreview);
+
+    input.addEventListener('change', () => {
+      let value = input.value.trim();
+      if (value && !value.startsWith('#')) {
+        value = '#' + value;
+      }
+      if (!/^#[0-9a-fA-F]{3,6}$/.test(value)) {
+        input.style.borderColor = '#E74C3C';
+        return;
+      }
+      input.style.borderColor = '#30354a';
+      colors[team.displayName] = value;
+      preview.style.background = value;
+      saveTeamColors(activeLeagueId, colors);
+      renderPowerTab();
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+
+  powerAdminPanel.innerHTML = '';
+  powerAdminPanel.appendChild(wrapper);
+}
+
 // PRESENTATION MODE
 
 function enterPowerPresentationMode() {
@@ -1428,6 +1611,7 @@ function enterPowerPresentationMode() {
   powerPresentationStep = -1;
 
   if (powerTableContainer) powerTableContainer.classList.add('hidden');
+  if (powerAdminPanel) powerAdminPanel.classList.add('hidden');
   if (powerPresentationContainer) powerPresentationContainer.classList.remove('hidden');
 
   powerPresentationContainer.innerHTML = `
@@ -1461,14 +1645,13 @@ function handlePowerNext(slidesContainer, nextBtn) {
   const totalTeams = powerRevealOrder.length;
 
   if (powerPresentationStep === -1) {
-    // Intro slide
     const intro = document.createElement('div');
     intro.className = 'presentation-slide presentation-intro';
 
-    const logoSrc = LEAGUE_LOGOS[activeLeagueId];
-    if (logoSrc) {
+    const logoUrl = loadLeagueLogo(activeLeagueId);
+    if (logoUrl) {
       const img = document.createElement('img');
-      img.src = logoSrc;
+      img.src = logoUrl;
       img.alt = 'League logo';
       img.className = 'presentation-logo';
       intro.appendChild(img);
@@ -1532,10 +1715,9 @@ function handlePowerNext(slidesContainer, nextBtn) {
       slide.appendChild(notesBody);
     }
 
-    const colorMeta = getTeamColorMeta(row.teamName);
+    const colorMeta = getTeamColorMeta(row.teamName, activeLeagueId);
     slide.style.background = `linear-gradient(135deg, ${colorMeta.headerDark}, ${colorMeta.headerLight})`;
 
-    // Insert at top so higher-ranked teams stack above
     slidesContainer.insertBefore(slide, slidesContainer.children[1] || null);
 
     powerPresentationStep += 1;
@@ -1547,17 +1729,35 @@ function handlePowerNext(slidesContainer, nextBtn) {
     return;
   }
 
-  // Exiting
   exitPowerPresentationMode();
 }
 
-// TEAM COLOR FROM NAME
+// TEAM COLOR META
 
-function getTeamColorMeta(name) {
-  const baseHue = hashStringToHue(name || '');
-  const headerDark = `hsl(${baseHue}, 70%, 24%)`;
-  const headerLight = `hsl(${baseHue}, 70%, 40%)`;
-  const gradient = `linear-gradient(90deg, ${headerDark} 0%, ${headerLight} 50%, transparent 100%)`;
+function getTeamColorMeta(teamName, leagueId) {
+  const defaultHue = hashStringToHue(teamName || '');
+  let baseColor = `hsl(${defaultHue}, 70%, 40%)`;
+
+  if (leagueId) {
+    const colors = loadTeamColors(leagueId);
+    if (colors && colors[teamName]) {
+      baseColor = colors[teamName];
+    }
+  }
+
+  let headerDark = baseColor;
+  let headerLight = baseColor;
+
+  if (baseColor.startsWith('#')) {
+    const { r, g, b } = hexToRgb(baseColor);
+    headerDark = `rgba(${r}, ${g}, ${b}, 0.85)`;
+    headerLight = `rgba(${r}, ${g}, ${b}, 1)`;
+  } else {
+    headerDark = baseColor;
+    headerLight = baseColor;
+  }
+
+  const gradient = `linear-gradient(90deg, ${headerDark} 0%, ${headerLight} 55%, transparent 100%)`;
   return { headerDark, headerLight, gradient };
 }
 
@@ -1569,6 +1769,19 @@ function hashStringToHue(str) {
   }
   const hue = (hash % 360 + 360) % 360;
   return hue;
+}
+
+function hexToRgb(hex) {
+  let h = hex.replace('#', '');
+  if (h.length === 3) {
+    h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  const num = parseInt(h, 16);
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255
+  };
 }
 
 // POWER RANKINGS CALC
