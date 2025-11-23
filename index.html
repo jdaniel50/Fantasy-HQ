@@ -157,10 +157,16 @@
               Combined view of ROS strength, league standings, and all-play performance over the last 3 weeks.
             </div>
           </div>
-          <div class="card-body" id="powerContent">
-            <div class="muted-text">
-              Select a league and upload ROS rankings to generate power rankings.
+          <div class="card-body">
+            <div class="power-header-row">
+              <button id="powerPresentationBtn" class="btn btn-primary">Presentation Mode</button>
             </div>
+            <div id="powerTableContainer" class="table-section">
+              <div class="muted-text">
+                Select a league and upload ROS rankings to generate power rankings.
+              </div>
+            </div>
+            <div id="powerPresentationContainer" class="power-presentation hidden"></div>
           </div>
         </div>
       </section>
