@@ -2209,3 +2209,4 @@ function applyByeColor(td, byeWeek) {
     td.textContent = String(byeWeek);
   }
 }
+ 
