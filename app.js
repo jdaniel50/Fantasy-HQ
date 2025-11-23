@@ -1,1501 +1,2211 @@
 // app.js
-// Fantasy-HQ dashboard
 
-const SLEEPER_BASE = 'https://api.sleeper.app/v1';
-const NFL_STATE_URL = `${SLEEPER_BASE}/state/nfl`;
-
-const LEAGUES = [
-  { id: '1186844188245356544', name: 'League of Record', key: 'league_of_record' },
-  { id: '1186825886808555520', name: 'Dynasty Champs', key: 'dynasty_champs' },
-  { id: '1257084943821967360', name: 'FFL', key: 'ffl' }
+// CONFIG
+const SLEEPER_USERNAME = 'stuckabuc';
+const LEAGUE_IDS = [
+  '1186844188245356544', // League of Record
+  '1186825886808555520', // Dynasty Champs
+  '1257084943821967360'  // FFL
 ];
 
-const USERNAME = 'stuckabuc';
+// STATE
+let sleeperState = null;
+let playersById = {};
+let playersByNameLower = new Map();
+let playersBySimpleNameLower = new Map();
+let leaguesMap = new Map();
+let activeLeagueId = null;
+let myUserId = null;
 
-const state = {
-  currentLeagueId: null,
-  leagueData: {},          // leagueId -> { league, users, rosters, matchupsByWeek, ownership }
-  rosData: null,           // raw ROS CSV rows
-  weekDataRaw: null,       // raw "wide" this-week rows
-  weekByPosition: {},      // derived: QB/RB/WR/TE/FLEX/DST arrays
-  sleeperPlayers: null,    // players dictionary
-  nflState: null,
-  myUserId: null,
-  powerSort: { column: 'rank', direction: 'asc' }
-};
+let rosData = [];
+let rosByName = new Map();
+let weekData = [];
 
-// --- Utilities ---
+const leagueSelect = document.getElementById('leagueSelect');
+const teamSelect = document.getElementById('teamSelect');
+const teamsContent = document.getElementById('teamsContent');
+const teamOwnerLabel = document.getElementById('teamOwnerLabel');
+const upgradeCard = document.getElementById('upgradeCard');
+const upgradeContent = document.getElementById('upgradeContent');
+const weekContent = document.getElementById('weekContent');
+const rosContent = document.getElementById('rosContent');
+const currentSeasonLabel = document.getElementById('currentSeasonLabel');
+const currentWeekLabel = document.getElementById('currentWeekLabel');
+const weekPositionSelect = document.getElementById('weekPositionSelect');
+const refreshSleeperBtn = document.getElementById('refreshSleeperBtn');
 
-function parseCsv(text) {
-  const lines = text.trim().split(/\r?\n/);
-  const headers = lines[0].split(',').map(h => h.trim());
-  return lines.slice(1).map(line => {
-    const cells = line.split(',').map(c => c.trim());
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = cells[i] ?? '';
-    });
-    return obj;
+const powerTableContainer = document.getElementById('powerTableContainer');
+const powerPresentationContainer = document.getElementById('powerPresentationContainer');
+const powerPresentationBtn = document.getElementById('powerPresentationBtn');
+const powerAdminPanel = document.getElementById('powerAdminPanel');
+const powerAdminToggle = document.getElementById('powerAdminToggle');
+
+let controlsInitialized = false;
+
+// Power rankings state
+let lastPowerRows = [];
+let powerRevealOrder = [];
+let powerPresentationActive = false;
+let powerPresentationStep = -1;
+
+// INIT
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadFromLocal();
+  initTabs();
+  initCsvInputs();
+  initControls();
+  initSleeper().catch(err => {
+    console.error(err);
+    leagueSelect.innerHTML = '<option value="">Error loading leagues</option>';
   });
-}
+});
 
-function saveJson(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
+// LOCAL STORAGE
 
-function loadJson(key, fallback = null) {
-  const raw = localStorage.getItem(key);
-  if (!raw) return fallback;
+function loadFromLocal() {
   try {
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return res.json();
-}
-
-// --- Sleeper loading ---
-
-async function loadNflState() {
-  if (state.nflState) return state.nflState;
-  state.nflState = await fetchJson(NFL_STATE_URL);
-  const seasonLabel = document.getElementById('currentSeasonLabel');
-  const weekLabel = document.getElementById('currentWeekLabel');
-  if (seasonLabel) seasonLabel.textContent = `Season: ${state.nflState.season}`;
-  if (weekLabel) weekLabel.textContent = `Week ${state.nflState.week}`;
-  return state.nflState;
-}
-
-async function loadSleeperPlayers() {
-  if (state.sleeperPlayers) return state.sleeperPlayers;
-  state.sleeperPlayers = await fetchJson(`${SLEEPER_BASE}/players/nfl`);
-  return state.sleeperPlayers;
-}
-
-async function loadMyUser() {
-  if (state.myUserId) return state.myUserId;
-  const user = await fetchJson(`${SLEEPER_BASE}/user/${USERNAME}`);
-  state.myUserId = user.user_id;
-  return state.myUserId;
-}
-
-async function loadLeagueBundle(leagueId, force = false) {
-  if (state.leagueData[leagueId] && !force) return state.leagueData[leagueId];
-
-  const league = await fetchJson(`${SLEEPER_BASE}/league/${leagueId}`);
-  const users = await fetchJson(`${SLEEPER_BASE}/league/${leagueId}/users`);
-  const rosters = await fetchJson(`${SLEEPER_BASE}/league/${leagueId}/rosters`);
-  const myUserId = await loadMyUser();
-
-  const ownershipMap = {}; // player_id -> { roster_id, isMine }
-
-  rosters.forEach(r => {
-    const isMine = r.owner_id === myUserId;
-    (r.players || []).forEach(pid => {
-      ownershipMap[pid] = {
-        roster_id: r.roster_id,
-        isMine
-      };
-    });
-  });
-
-  state.leagueData[leagueId] = {
-    league,
-    users,
-    rosters,
-    matchupsByWeek: {},
-    ownership: ownershipMap
-  };
-
-  return state.leagueData[leagueId];
-}
-
-async function loadMatchupsForWeeks(leagueId, weeks) {
-  const bundle = await loadLeagueBundle(leagueId);
-  for (const w of weeks) {
-    if (!bundle.matchupsByWeek[w]) {
-      try {
-        const m = await fetchJson(`${SLEEPER_BASE}/league/${leagueId}/matchups/${w}`);
-        bundle.matchupsByWeek[w] = m;
-      } catch (err) {
-        console.error('Failed matchups week', w, err);
-        bundle.matchupsByWeek[w] = [];
+    const rosJson = localStorage.getItem('fantasy_ros_data');
+    if (rosJson) {
+      const parsed = JSON.parse(rosJson);
+      if (Array.isArray(parsed)) {
+        rosData = parsed;
+        rosByName = new Map();
+        rosData.forEach(r => {
+          if (r && r.player) {
+            rosByName.set(r.player.toLowerCase(), r);
+          }
+        });
       }
     }
-  }
-  return bundle.matchupsByWeek;
-}
-
-function mapRostersWithUsers(bundle) {
-  const userById = {};
-  bundle.users.forEach(u => {
-    userById[u.user_id] = u;
-  });
-  return bundle.rosters.map(r => {
-    const u = userById[r.owner_id] || null;
-    const displayName = u?.metadata?.team_name || u?.display_name || `Team ${r.roster_id}`;
-    const pf = (r.settings?.fpts ?? 0) + (r.settings?.fpts_decimal ?? 0) / 100;
-    return {
-      roster_id: r.roster_id,
-      owner_id: r.owner_id,
-      name: displayName,
-      wins: r.settings?.wins ?? 0,
-      losses: r.settings?.losses ?? 0,
-      ties: r.settings?.ties ?? 0,
-      pf,
-      players: r.players || [],
-      starters: r.starters || [],
-      isMine: r.owner_id === state.myUserId
-    };
-  });
-}
-
-// --- Player mapping between ROS/ThisWeek and Sleeper ---
-
-function buildNameIndex(playersDict) {
-  const idx = {};
-  Object.values(playersDict).forEach(p => {
-    if (!p.full_name) return;
-    const key = p.full_name.toLowerCase().trim();
-    if (!idx[key]) idx[key] = [];
-    idx[key].push(p);
-  });
-  return idx;
-}
-
-function findPlayerIdByNameAndPos(name, position, playersDict, nameIndex) {
-  if (!name) return null;
-  const key = name.toLowerCase().trim();
-  let candidates = nameIndex[key] || [];
-  if (position) {
-    const up = position.toUpperCase();
-    candidates = candidates.filter(p => p.position === up);
-  }
-  if (!candidates.length) {
-    candidates = Object.values(playersDict).filter(
-      p =>
-        p.full_name &&
-        p.full_name.toLowerCase().startsWith(key) &&
-        (!position || p.position === position.toUpperCase())
-    );
-  }
-  if (!candidates.length) return null;
-  return candidates[0].player_id;
-}
-
-async function attachSleeperIdsToRos() {
-  if (!state.rosData) return;
-  const playersDict = await loadSleeperPlayers();
-  const nameIndex = buildNameIndex(playersDict);
-
-  state.rosData.forEach(row => {
-    const name = row.Player || row.player || row.name;
-    let pos = row.Position || row.position;
-    if (!name || !pos) return;
-    pos = pos.toUpperCase();
-    const pid = findPlayerIdByNameAndPos(name, pos, playersDict, nameIndex);
-    row.sleeper_id = pid || null;
-  });
-}
-
-function findRosByPlayerId(pid) {
-  if (!state.rosData || !pid) return null;
-  return state.rosData.find(r => r.sleeper_id === pid) || null;
-}
-
-async function findSleeperIdByName(name) {
-  if (!name) return null;
-  const dict = await loadSleeperPlayers();
-  const nameIndex = buildNameIndex(dict);
-  const key = name.toLowerCase().trim();
-  const candidates = nameIndex[key];
-  if (!candidates || !candidates.length) return null;
-  return candidates[0].player_id;
-}
-
-// --- Conditional formatting helpers ---
-
-function interpolateColor(t, c1, c2) {
-  const r = Math.round(c1[0] + (c2[0] - c1[0]) * t);
-  const g = Math.round(c1[1] + (c2[1] - c1[1]) * t);
-  const b = Math.round(c1[2] + (c2[2] - c1[2]) * t);
-  return `rgb(${r},${g},${b})`;
-}
-
-function getGradientColor(value, min, mid, max, invert = false) {
-  if (value == null || isNaN(value)) return '';
-  if (value <= min) value = min;
-  if (value >= max) value = max;
-  let t;
-  if (value <= mid) {
-    t = (value - min) / (mid - min || 1);
-    // green -> yellow
-    const start = invert ? [239, 68, 68] : [34, 197, 94];
-    const end = [250, 204, 21];
-    return interpolateColor(t, start, end);
-  } else {
-    t = (value - mid) / (max - mid || 1);
-    // yellow -> red
-    const start = [250, 204, 21];
-    const end = invert ? [34, 197, 94] : [239, 68, 68];
-    return interpolateColor(t, start, end);
-  }
-}
-
-// --- CSV uploads ---
-
-function setupCsvUpload() {
-  const rosInput = document.getElementById('ros-file-input');
-  const weekInput = document.getElementById('week-file-input');
-
-  if (rosInput) {
-    rosInput.addEventListener('change', e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async ev => {
-        const text = ev.target.result;
-        const rows = parseCsv(text);
-        state.rosData = rows;
-        saveJson('ros_csv_data', rows);
-        await attachSleeperIdsToRos();
-        if (state.currentLeagueId) {
-          renderTeamsTab();
-          renderRosTab();
-          computeAndRenderPowerRankings(state.currentLeagueId);
-        } else {
-          renderRosTab();
-        }
-      };
-      reader.readAsText(file);
-    });
-  }
-
-  if (weekInput) {
-    weekInput.addEventListener('change', e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async ev => {
-        const text = ev.target.result;
-        const rows = parseCsv(text);
-        state.weekDataRaw = rows;
-        saveJson('week_csv_data', rows);
-        deriveWeekByPosition();
-        renderWeekTab();
-      };
-      reader.readAsText(file);
-    });
-  }
-
-  // Load saved
-  const savedRos = loadJson('ros_csv_data', null);
-  if (savedRos) {
-    state.rosData = savedRos;
-    attachSleeperIdsToRos();
-  }
-  const savedWeek = loadJson('week_csv_data', null);
-  if (savedWeek) {
-    state.weekDataRaw = savedWeek;
-    deriveWeekByPosition();
-  }
-}
-
-// Parse "wide" This Week CSV into per-position arrays
-function deriveWeekByPosition() {
-  const raw = state.weekDataRaw;
-  if (!raw) {
-    state.weekByPosition = {};
-    return;
-  }
-  const byPos = {
-    QB: [],
-    RB: [],
-    WR: [],
-    TE: [],
-    FLEX: [],
-    DST: []
-  };
-
-  raw.forEach(row => {
-    const cells = Object.values(row);
-    // Expecting the specific wide layout described.
-    const qbRank = cells[0];
-    const qbName = cells[1];
-    const qbTeam = cells[2];
-    const qbOpp = cells[3];
-    const qbTotal = cells[4];
-    const qbMatch = cells[5];
-    const qbTier = cells[6];
-
-    const rbRank = cells[7];
-    const rbName = cells[8];
-    const rbTeam = cells[9];
-    const rbOpp = cells[10];
-    const rbTotal = cells[11];
-    const rbMatch = cells[12];
-    const rbTier = cells[13];
-
-    const wrRank = cells[14];
-    const wrName = cells[15];
-    const wrTeam = cells[16];
-    const wrOpp = cells[17];
-    const wrTotal = cells[18];
-    const wrMatch = cells[19];
-    const wrTier = cells[20];
-
-    const teRank = cells[21];
-    const teName = cells[22];
-    const teTeam = cells[23];
-    const teOpp = cells[24];
-    const teTotal = cells[25];
-    const teMatch = cells[26];
-    const teTier = cells[27];
-
-    const dstRank = cells[28];
-    const dstName = cells[29];
-    const dstOpp = cells[30];
-    const dstSpread = cells[31];
-    const dstTier = cells[32];
-
-    const flex1Rank = cells[33];
-    const flex1Name = cells[34];
-    const flex1Team = cells[35];
-    const flex1Opp = cells[36];
-    const flex1Total = cells[37];
-    const flex1Pos = cells[38];
-    const flex1Match = cells[39];
-
-    const flex2Rank = cells[40];
-    const flex2Name = cells[41];
-    const flex2Team = cells[42];
-    const flex2Opp = cells[43];
-    const flex2Total = cells[44];
-    const flex2Pos = cells[45];
-    const flex2Match = cells[46];
-
-    function pushIfValid(target, obj) {
-      if (obj.name && obj.rank) target.push(obj);
+    const weekJson = localStorage.getItem('fantasy_week_data');
+    if (weekJson) {
+      const parsedWeek = JSON.parse(weekJson);
+      if (Array.isArray(parsedWeek)) {
+        weekData = parsedWeek;
+      }
     }
-
-    pushIfValid(byPos.QB, {
-      rank: Number(qbRank),
-      name: qbName,
-      team: qbTeam,
-      opp: qbOpp,
-      total: Number(qbTotal),
-      matchup: Number(qbMatch),
-      tier: qbTier
-    });
-
-    pushIfValid(byPos.RB, {
-      rank: Number(rbRank),
-      name: rbName,
-      team: rbTeam,
-      opp: rbOpp,
-      total: Number(rbTotal),
-      matchup: Number(rbMatch),
-      tier: rbTier
-    });
-
-    pushIfValid(byPos.WR, {
-      rank: Number(wrRank),
-      name: wrName,
-      team: wrTeam,
-      opp: wrOpp,
-      total: Number(wrTotal),
-      matchup: Number(wrMatch),
-      tier: wrTier
-    });
-
-    pushIfValid(byPos.TE, {
-      rank: Number(teRank),
-      name: teName,
-      team: teTeam,
-      opp: teOpp,
-      total: Number(teTotal),
-      matchup: Number(teMatch),
-      tier: teTier
-    });
-
-    pushIfValid(byPos.DST, {
-      rank: Number(dstRank),
-      name: dstName,
-      opp: dstOpp,
-      spread: Number(dstSpread),
-      tier: dstTier
-    });
-
-    function pushFlex(rank, name, team, opp, total, pos, match) {
-      if (!name || !rank) return;
-      byPos.FLEX.push({
-        rank: Number(rank),
-        name,
-        team,
-        opp,
-        total: Number(total),
-        pos,
-        matchup: Number(match)
-      });
-    }
-
-    pushFlex(flex1Rank, flex1Name, flex1Team, flex1Opp, flex1Total, flex1Pos, flex1Match);
-    pushFlex(flex2Rank, flex2Name, flex2Team, flex2Opp, flex2Total, flex2Pos, flex2Match);
-  });
-
-  Object.keys(byPos).forEach(p => {
-    byPos[p].sort((a, b) => a.rank - b.rank);
-  });
-
-  state.weekByPosition = byPos;
-}
-
-// --- League dropdown & refresh ---
-
-function setupLeagueDropdown() {
-  const sel = document.getElementById('league-select');
-  if (!sel) return;
-
-  sel.innerHTML = '';
-  LEAGUES.forEach(lg => {
-    const opt = document.createElement('option');
-    opt.value = lg.id;
-    opt.textContent = lg.name;
-    sel.appendChild(opt);
-  });
-
-  sel.onchange = async () => {
-    const id = sel.value;
-    state.currentLeagueId = id || null;
-    if (!id) return;
-    await loadLeagueBundle(id);
-    renderTeamsTab();
-    renderRosTab();
-    computeAndRenderPowerRankings(id);
-    renderWeekTab(); // for ownership highlighting
-    populateTeamSelect();
-  };
-
-  if (LEAGUES.length > 0) {
-    sel.value = LEAGUES[0].id;
-    state.currentLeagueId = LEAGUES[0].id;
-    loadLeagueBundle(LEAGUES[0].id).then(() => {
-      renderTeamsTab();
-      renderRosTab();
-      computeAndRenderPowerRankings(LEAGUES[0].id);
-      renderWeekTab();
-      populateTeamSelect();
-    });
-  }
-
-  const refBtn = document.getElementById('refreshSleeperBtn');
-  if (refBtn) {
-    refBtn.onclick = async () => {
-      if (!state.currentLeagueId) return;
-      // Force reload current league
-      await loadLeagueBundle(state.currentLeagueId, true);
-      renderTeamsTab();
-      renderRosTab();
-      computeAndRenderPowerRankings(state.currentLeagueId);
-      renderWeekTab();
-      populateTeamSelect();
-    };
+  } catch (e) {
+    console.error('Failed to load from localStorage', e);
   }
 }
 
-// --- Tabs ---
+// TABS
 
-function setupTabs() {
+function initTabs() {
   const buttons = document.querySelectorAll('.tab-button');
-  const contents = document.querySelectorAll('.tab-content');
+  const tabs = document.querySelectorAll('.tab-content');
 
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
-      const tgt = btn.getAttribute('data-tab');
       buttons.forEach(b => b.classList.remove('active'));
-      contents.forEach(c => c.classList.remove('active'));
       btn.classList.add('active');
-      const sec = document.getElementById(tgt);
-      if (sec) sec.classList.add('active');
+
+      const targetId = btn.dataset.tab;
+      tabs.forEach(tab => {
+        if (tab.id === targetId) tab.classList.add('active');
+        else tab.classList.remove('active');
+      });
+
+      if (targetId === 'teamsTab') renderTeamsTab();
+      else if (targetId === 'weekTab') renderWeekTab();
+      else if (targetId === 'rosTab') renderRosTab();
+      else if (targetId === 'powerTab') renderPowerTab();
     });
   });
+
+  if (weekPositionSelect) {
+    weekPositionSelect.addEventListener('change', () => {
+      renderWeekTab();
+    });
+  }
 }
 
-// --- Teams tab ---
+// CONTROLS
 
-function populateTeamSelect() {
-  const sel = document.getElementById('teamSelect');
-  const ownerLabel = document.getElementById('teamOwnerLabel');
-  if (!sel || !state.currentLeagueId) return;
+function initControls() {
+  if (controlsInitialized) return;
 
-  const bundle = state.leagueData[state.currentLeagueId];
-  if (!bundle) return;
-
-  const teams = mapRostersWithUsers(bundle);
-
-  sel.innerHTML = '<option value="">Select a team</option>';
-  teams.forEach(t => {
-    const opt = document.createElement('option');
-    opt.value = t.roster_id;
-    opt.textContent = t.name;
-    sel.appendChild(opt);
+  leagueSelect.addEventListener('change', () => {
+    activeLeagueId = leagueSelect.value || null;
+    populateTeamSelect();
+    renderTeamsTab();
+    renderWeekTab();
+    renderRosTab();
+    renderPowerTab();
   });
 
-  sel.onchange = () => {
-    const rid = Number(sel.value);
-    const team = teams.find(t => t.roster_id === rid);
-    if (ownerLabel) {
-      if (team?.isMine) {
-        ownerLabel.textContent = 'My team';
-      } else if (team) {
-        ownerLabel.textContent = team.name;
+  teamSelect.addEventListener('change', () => {
+    renderTeamsTab();
+  });
+
+  if (refreshSleeperBtn) {
+    refreshSleeperBtn.addEventListener('click', async () => {
+      await refreshSleeperData();
+    });
+  }
+
+  if (powerPresentationBtn) {
+    powerPresentationBtn.addEventListener('click', () => {
+      if (!lastPowerRows.length) {
+        renderPowerTab().then(() => {
+          if (lastPowerRows.length) enterPowerPresentationMode();
+        }).catch(() => {});
       } else {
-        ownerLabel.textContent = '';
+        enterPowerPresentationMode();
+      }
+    });
+  }
+
+  if (powerAdminToggle && powerAdminPanel) {
+    powerAdminToggle.addEventListener('click', () => {
+      const nowHidden = powerAdminPanel.classList.toggle('hidden');
+      if (!nowHidden) {
+        renderPowerAdminPanel();
+      }
+    });
+  }
+
+  controlsInitialized = true;
+}
+
+// CSV INPUTS
+
+function initCsvInputs() {
+  const rosInput = document.getElementById('rosCsvInput');
+  const weekInput = document.getElementById('weekCsvInput');
+
+  rosInput.addEventListener('change', () => handleCsvInput(rosInput, 'ros'));
+  weekInput.addEventListener('change', () => handleCsvInput(weekInput, 'week'));
+}
+
+function handleCsvInput(inputEl, type) {
+  const file = inputEl.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+
+    if (type === 'ros') {
+      const parsed = Papa.parse(text, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false
+      });
+
+      if (parsed.errors && parsed.errors.length) {
+        console.error(parsed.errors);
+        alert(`ROS CSV parse error: ${parsed.errors[0].message}`);
+        return;
+      }
+
+      const prevMap = new Map();
+      rosData.forEach(r => {
+        if (!r || !r.player) return;
+        const key = r.player.toLowerCase();
+        if (!prevMap.has(key) && Number.isFinite(r.rank)) {
+          prevMap.set(key, r.rank);
+        }
+      });
+
+      const newRos = parsed.data.map(normalizeRosRow).filter(r => r.player);
+      newRos.forEach(row => {
+        const key = row.player.toLowerCase();
+        const prevRank = prevMap.get(key);
+        if (Number.isFinite(prevRank) && Number.isFinite(row.rank)) {
+          row.move = prevRank - row.rank;
+        } else {
+          row.move = null;
+        }
+      });
+
+      rosData = newRos;
+      rosByName.clear();
+      rosData.forEach(row => {
+        rosByName.set(row.player.toLowerCase(), row);
+      });
+
+      try {
+        localStorage.setItem('fantasy_ros_data', JSON.stringify(rosData));
+      } catch (e) {
+        console.warn('Unable to store ROS data in localStorage', e);
+      }
+
+      renderTeamsTab();
+      renderRosTab();
+      renderPowerTab();
+    } else if (type === 'week') {
+      const parsed = Papa.parse(text, {
+        header: false,
+        skipEmptyLines: true,
+        dynamicTyping: false
+      });
+
+      if (parsed.errors && parsed.errors.length) {
+        console.error(parsed.errors);
+        alert(`This Week CSV parse error: ${parsed.errors[0].message}`);
+        return;
+      }
+
+      weekData = buildWeekDataFromRows(parsed.data);
+
+      try {
+        localStorage.setItem('fantasy_week_data', JSON.stringify(weekData));
+      } catch (e) {
+        console.warn('Unable to store week data in localStorage', e);
+      }
+
+      renderWeekTab();
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ROS NORMALIZATION
+
+function normalizeRosRow(raw) {
+  const lowerMap = {};
+  Object.entries(raw || {}).forEach(([k, v]) => {
+    if (!k) return;
+    lowerMap[k.toLowerCase()] = v;
+  });
+
+  const getStr = (...names) => {
+    for (const n of names) {
+      if (lowerMap[n] != null && String(lowerMap[n]).trim() !== '') {
+        return String(lowerMap[n]).trim();
       }
     }
-    renderTeamsTab();
+    return '';
+  };
+
+  const getNum = (...names) => {
+    const s = getStr(...names);
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  return {
+    rank: getNum('overall', 'rank'),
+    player: getStr('player', 'name', 'player_name'),
+    position: getStr('position', 'pos').toUpperCase(),
+    pos_rank: getNum('positional rank', 'pos_rank', 'position_rank'),
+    tier: getNum('tier'),
+    move: null,
+    team: getStr('team'),
+    ros: getNum('ros', 'ros schedule', 'ros_schedule'),
+    next4: getNum('next 4', 'next4', 'next_4'),
+    ppg: getNum('ppg', 'points per game', 'points_per_game'),
+    bye: getNum('bye', 'bye week')
   };
 }
 
-function renderTeamsTab() {
-  const container = document.getElementById('teamsContent');
-  const upgradeCard = document.getElementById('upgradeCard');
-  const upgradeContent = document.getElementById('upgradeContent');
-  const sel = document.getElementById('teamSelect');
-  if (!container) return;
+// THIS WEEK NORMALIZATION FROM WIDE FORMAT
 
-  if (!state.currentLeagueId) {
-    container.innerHTML = '<div class="muted-text">Select a league to view teams.</div>';
-    if (upgradeCard) upgradeCard.style.display = 'none';
-    return;
-  }
-  const bundle = state.leagueData[state.currentLeagueId];
-  if (!bundle) {
-    container.innerHTML = '<div class="muted-text">Loading league data...</div>';
-    if (upgradeCard) upgradeCard.style.display = 'none';
-    return;
-  }
-  if (!state.rosData) {
-    container.innerHTML = '<div class="muted-text">Upload your ROS CSV to see team strength.</div>';
-    if (upgradeCard) upgradeCard.style.display = 'none';
-    return;
+function buildWeekDataFromRows(rows) {
+  if (!rows || rows.length === 0) return [];
+
+  const header = rows[0].map(c => (c || '').trim());
+  const dataRows = rows.slice(1);
+
+  const findIndex = (label, from = 0) => header.indexOf(label, from);
+
+  const segments = [];
+
+  const qbNameIdx = findIndex('Quarterback');
+  if (qbNameIdx !== -1) {
+    segments.push({
+      group: 'QB',
+      rankIdx: qbNameIdx - 1,
+      nameIdx: qbNameIdx,
+      teamIdx: qbNameIdx + 1,
+      oppIdx: qbNameIdx + 2,
+      totalIdx: qbNameIdx + 3,
+      matchupIdx: qbNameIdx + 4,
+      tierIdx: qbNameIdx + 5,
+      posIdx: null,
+      fromFlex: false
+    });
   }
 
-  const teams = mapRostersWithUsers(bundle);
-  let targetRoster = null;
+  const rbNameIdx = findIndex('Running Back');
+  if (rbNameIdx !== -1) {
+    segments.push({
+      group: 'RB',
+      rankIdx: rbNameIdx - 1,
+      nameIdx: rbNameIdx,
+      teamIdx: rbNameIdx + 1,
+      oppIdx: rbNameIdx + 2,
+      totalIdx: rbNameIdx + 3,
+      matchupIdx: rbNameIdx + 4,
+      tierIdx: rbNameIdx + 5,
+      posIdx: null,
+      fromFlex: false
+    });
+  }
 
-  if (sel && sel.value) {
-    targetRoster = teams.find(t => t.roster_id === Number(sel.value));
-  } else {
-    targetRoster = teams.find(t => t.isMine) || teams[0];
-    if (sel && targetRoster) {
-      sel.value = String(targetRoster.roster_id);
+  const wrNameIdx = findIndex('Wide Receiver');
+  if (wrNameIdx !== -1) {
+    segments.push({
+      group: 'WR',
+      rankIdx: wrNameIdx - 1,
+      nameIdx: wrNameIdx,
+      teamIdx: wrNameIdx + 1,
+      oppIdx: wrNameIdx + 2,
+      totalIdx: wrNameIdx + 3,
+      matchupIdx: wrNameIdx + 4,
+      tierIdx: wrNameIdx + 5,
+      posIdx: null,
+      fromFlex: false
+    });
+  }
+
+  const teNameIdx = findIndex('Tight End');
+  if (teNameIdx !== -1) {
+    segments.push({
+      group: 'TE',
+      rankIdx: teNameIdx - 1,
+      nameIdx: teNameIdx,
+      teamIdx: teNameIdx + 1,
+      oppIdx: teNameIdx + 2,
+      totalIdx: teNameIdx + 3,
+      matchupIdx: teNameIdx + 4,
+      tierIdx: teNameIdx + 5,
+      posIdx: null,
+      fromFlex: false
+    });
+  }
+
+  const defNameIdx = findIndex('Defense');
+  if (defNameIdx !== -1) {
+    segments.push({
+      group: 'DST',
+      rankIdx: defNameIdx - 1,
+      nameIdx: defNameIdx,
+      teamIdx: null,
+      oppIdx: defNameIdx + 1,
+      totalIdx: null,
+      matchupIdx: defNameIdx + 3,
+      tierIdx: defNameIdx + 4,
+      posIdx: null,
+      fromFlex: false
+    });
+  }
+
+  const flex1NameIdx = findIndex('FLEX');
+  if (flex1NameIdx !== -1) {
+    segments.push({
+      group: 'FLEX',
+      rankIdx: flex1NameIdx - 1,
+      nameIdx: flex1NameIdx,
+      teamIdx: flex1NameIdx + 1,
+      oppIdx: flex1NameIdx + 2,
+      totalIdx: flex1NameIdx + 3,
+      matchupIdx: flex1NameIdx + 5,
+      tierIdx: null,
+      posIdx: flex1NameIdx + 4,
+      fromFlex: true
+    });
+  }
+
+  const flex2NameIdx = flex1NameIdx !== -1 ? findIndex('FLEX', flex1NameIdx + 1) : -1;
+  if (flex2NameIdx !== -1) {
+    segments.push({
+      group: 'FLEX',
+      rankIdx: flex2NameIdx - 1,
+      nameIdx: flex2NameIdx,
+      teamIdx: flex2NameIdx + 1,
+      oppIdx: flex2NameIdx + 2,
+      totalIdx: flex2NameIdx + 3,
+      matchupIdx: flex2NameIdx + 5,
+      tierIdx: null,
+      posIdx: flex2NameIdx + 4,
+      fromFlex: true
+    });
+  }
+
+  const flat = [];
+
+  dataRows.forEach(rowArr => {
+    const row = rowArr || [];
+    const trimmed = row.map(c => (c || '').toString().trim());
+    const allBlank = trimmed.every(c => c === '');
+    if (allBlank) return;
+
+    segments.forEach(seg => {
+      const name = trimmed[seg.nameIdx] || '';
+      if (!name) return;
+
+      const basePos = seg.fromFlex
+        ? (trimmed[seg.posIdx] || 'FLEX').toUpperCase()
+        : seg.group;
+
+      const group = seg.group;
+      const team = seg.teamIdx != null ? (trimmed[seg.teamIdx] || '') : '';
+      const opponent = seg.oppIdx != null ? (trimmed[seg.oppIdx] || '') : '';
+      const totalStr = seg.totalIdx != null ? trimmed[seg.totalIdx] : '';
+      const projPoints = totalStr ? Number(totalStr) : null;
+
+      const matchupStr = seg.matchupIdx != null ? trimmed[seg.matchupIdx] : '';
+      const matchupVal = matchupStr ? Number(matchupStr) : null;
+
+      const tierStr = seg.tierIdx != null ? trimmed[seg.tierIdx] : '';
+      const tierVal = tierStr ? Number(tierStr) : null;
+
+      const rankStr = seg.rankIdx != null ? trimmed[seg.rankIdx] : '';
+      const rankVal = rankStr ? Number(rankStr) : null;
+
+      flat.push({
+        player: name,
+        team,
+        group,
+        position: basePos,
+        opponent,
+        proj_points: Number.isFinite(projPoints) ? projPoints : null,
+        matchup: Number.isFinite(matchupVal) ? matchupVal : null,
+        tier: Number.isFinite(tierVal) ? tierVal : null,
+        rank: Number.isFinite(rankVal) ? rankVal : null
+      });
+    });
+  });
+
+  return flat;
+}
+
+// SLEEPER INIT
+
+async function initSleeper() {
+  await fetchSleeperCoreData();
+  populateLeagueSelect();
+  populateTeamSelect();
+  renderTeamsTab();
+  renderWeekTab();
+  renderRosTab();
+  renderPowerTab();
+}
+
+async function refreshSleeperData() {
+  await fetchSleeperCoreData();
+  populateLeagueSelect();
+  populateTeamSelect();
+  renderTeamsTab();
+  renderWeekTab();
+  renderRosTab();
+  renderPowerTab();
+}
+
+async function fetchSleeperCoreData() {
+  const stateRes = await fetch('https://api.sleeper.app/v1/state/nfl');
+  sleeperState = await stateRes.json();
+  if (sleeperState.season) {
+    currentSeasonLabel.textContent = `Season ${sleeperState.season}`;
+  }
+  if (sleeperState.week) {
+    currentWeekLabel.textContent = `Week ${sleeperState.week}`;
+  }
+
+  const userRes = await fetch(`https://api.sleeper.app/v1/user/${SLEEPER_USERNAME}`);
+  const user = await userRes.json();
+  myUserId = user.user_id;
+
+  const playersRes = await fetch('https://api.sleeper.app/v1/players/nfl');
+  playersById = await playersRes.json();
+  buildPlayersByNameIndex();
+
+  leaguesMap.clear();
+  for (const leagueId of LEAGUE_IDS) {
+    const infoRes = await fetch(`https://api.sleeper.app/v1/league/${leagueId}`);
+    const info = await infoRes.json();
+
+    const rostersRes = await fetch(`https://api.sleeper.app/v1/league/${leagueId}/rosters`);
+    const rosters = await rostersRes.json();
+
+    const usersRes = await fetch(`https://api.sleeper.app/v1/league/${leagueId}/users`);
+    const users = await usersRes.json();
+
+    leaguesMap.set(leagueId, { info, rosters, users });
+  }
+}
+
+// NAME INDEXING & LOOKUP
+
+function normalizeNameKey(name) {
+  if (!name) return '';
+  let n = name.toLowerCase();
+  n = n.replace(/[^a-z\s]/g, ' ');
+  n = n.replace(/\b(jr|sr|ii|iii|iv|v|vi)\b/g, '');
+  n = n.replace(/\s+/g, ' ').trim();
+  const parts = n.split(' ');
+  if (parts.length >= 2) {
+    n = parts[0] + ' ' + parts[parts.length - 1];
+  }
+  return n;
+}
+
+function buildPlayersByNameIndex() {
+  playersByNameLower.clear();
+  playersBySimpleNameLower.clear();
+
+  Object.entries(playersById).forEach(([playerId, p]) => {
+    const fullName = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
+    if (!fullName) return;
+
+    const key = fullName.toLowerCase();
+    if (!playersByNameLower.has(key)) {
+      playersByNameLower.set(key, playerId);
+    }
+
+    const simple = normalizeNameKey(fullName);
+    if (simple && !playersBySimpleNameLower.has(simple)) {
+      playersBySimpleNameLower.set(simple, playerId);
+    }
+  });
+}
+
+function lookupPlayerId(name, meta = {}) {
+  if (!name) return null;
+  const exactKey = name.toLowerCase();
+  const targetPos = meta.position ? meta.position.toUpperCase() : null;
+  const targetTeam = meta.team ? meta.team.toUpperCase() : null;
+
+  let pid = playersByNameLower.get(exactKey);
+  if (pid) {
+    const p = playersById[pid];
+    if (p) {
+      const posMatch = targetPos ? (p.position === targetPos) : true;
+      const teamMatch = targetTeam ? (p.team === targetTeam) : true;
+      if (posMatch && teamMatch) {
+        return pid;
+      }
     }
   }
 
-  if (!targetRoster) {
-    container.innerHTML = '<div class="muted-text">No team selected.</div>';
-    if (upgradeCard) upgradeCard.style.display = 'none';
+  const simple = normalizeNameKey(name);
+  if (!simple) return null;
+
+  const simpleParts = simple.split(' ');
+  const lastName = simpleParts[simpleParts.length - 1] || '';
+  const inputFirst = simpleParts[0];
+
+  let bestId = null;
+  let bestScore = -1;
+
+  if (lastName) {
+    for (const [candidateId, p] of Object.entries(playersById)) {
+      const fullName = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
+      if (!fullName) continue;
+
+      const sleeperSimple = normalizeNameKey(fullName);
+      const ssParts = sleeperSimple.split(' ');
+      const sleeperLast = ssParts[ssParts.length - 1] || '';
+      const sleeperFirst = ssParts[0];
+
+      if (sleeperLast !== lastName) continue;
+
+      let score = 1;
+
+      if (inputFirst && sleeperFirst && inputFirst === sleeperFirst) {
+        score += 2;
+      }
+
+      if (targetPos && p.position === targetPos) score += 3;
+      if (targetTeam && p.team === targetTeam) score += 3;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = candidateId;
+      }
+    }
+  }
+
+  if (bestId && bestScore >= 2) {
+    return bestId;
+  }
+
+  return null;
+}
+
+// LEAGUE & TEAM SELECT
+
+function populateLeagueSelect() {
+  leagueSelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select a league';
+  leagueSelect.appendChild(placeholder);
+
+  const existingIds = [...leaguesMap.keys()];
+
+  existingIds.forEach(id => {
+    const info = leaguesMap.get(id)?.info;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = info?.name || `League ${id}`;
+    leagueSelect.appendChild(opt);
+  });
+
+  if (activeLeagueId && leaguesMap.has(activeLeagueId)) {
+    leagueSelect.value = activeLeagueId;
+  } else if (existingIds.length) {
+    activeLeagueId = existingIds[0];
+    leagueSelect.value = activeLeagueId;
+  } else {
+    activeLeagueId = null;
+    leagueSelect.value = '';
+  }
+}
+
+function populateTeamSelect() {
+  teamSelect.innerHTML = '';
+  if (!activeLeagueId) {
+    teamSelect.innerHTML = '<option value="">Select a league first</option>';
     return;
   }
 
-  const players = targetRoster.players || [];
-  const byPos = { QB: [], RB: [], WR: [], TE: [], OTHER: [] };
-  players.forEach(pid => {
-    const ros = findRosByPlayerId(pid);
-    const pos = ros?.Position || ros?.position || 'OTHER';
-    const up = pos.toUpperCase();
-    const bucket = byPos[up] || byPos.OTHER;
-    bucket.push({ pid, ros, pos: up });
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) return;
+
+  const { rosters, users } = league;
+
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
+
+  const teams = rosters.map(r => {
+    const ownerUser = usersByIdMap.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    return {
+      roster_id: r.roster_id,
+      owner_id: r.owner_id,
+      displayName,
+      isMine: ownerUser?.user_id === myUserId
+    };
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  if (!teams.length) {
+    teamSelect.innerHTML = '<option value="">No rosters found</option>';
+    return;
+  }
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select a team';
+  teamSelect.appendChild(placeholder);
+
+  teams.forEach(team => {
+    const o = document.createElement('option');
+    o.value = String(team.roster_id);
+    o.textContent = team.displayName + (team.isMine ? ' (You)' : '');
+    teamSelect.appendChild(o);
   });
+}
 
-  function buildPositionTable(label, list) {
-    if (!list.length) return '';
-    let html = `<h4>${label}</h4>`;
-    html += `
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th>Rank</th>
-            <th>Pos Rank</th>
-            <th>Tier</th>
-            <th>PPG</th>
-            <th>Bye</th>
-            <th>ROS</th>
-            <th>Next 4</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-    // Sort by overall rank
-    const sorted = [...list].sort((a, b) => {
-      const ar = Number(a.ros?.Overall || a.ros?.rank || 9999);
-      const br = Number(b.ros?.Overall || b.ros?.rank || 9999);
-      return ar - br;
-    });
+// TEAMS TAB
 
-    sorted.forEach(item => {
-      const r = item.ros;
-      const name = r?.Player || r?.player || 'Unknown';
-      const overall = Number(r?.Overall || r?.rank || '');
-      const posRank = Number(r?.['Positional Rank'] || r?.pos_rank || '');
-      const tier = r?.Tier || r?.tier || '';
-      const ppg = Number(r?.PPG || '');
-      const bye = r?.Bye || '';
-      const ros = Number(r?.ROS || '');
-      const next4 = Number(r?.['Next 4'] || r?.Next4 || '');
-
-      const overallBg = overall ? getGradientColor(overall, 1, 70, 150, false) : '';
-      const posBg = posRank ? getGradientColor(posRank, 1, 15, 50, false) : '';
-      const rosBg = ros ? getGradientColor(ros, 1, 16, 32, true) : '';
-      const nextBg = next4 ? getGradientColor(next4, 1, 16, 32, true) : '';
-      const ppgBg = ppg ? getGradientColor(ppg, 8, 15, 30, false) : '';
-
-      html += `
-        <tr>
-          <td>${name}</td>
-          <td style="background:${overallBg}">${overall || ''}</td>
-          <td style="background:${posBg}">${posRank || ''}</td>
-          <td>${tier || ''}</td>
-          <td style="background:${ppgBg}">${ppg || ''}</td>
-          <td>${bye || ''}</td>
-          <td style="background:${rosBg}">${ros || ''}</td>
-          <td style="background:${nextBg}">${next4 || ''}</td>
-        </tr>
-      `;
-    });
-
-    html += '</tbody></table>';
-    return html;
+function renderTeamsTab() {
+  if (!activeLeagueId) {
+    teamsContent.innerHTML = '<div class="muted-text">Select a league to view rosters.</div>';
+    upgradeCard.style.display = 'none';
+    teamOwnerLabel.textContent = '';
+    return;
   }
 
-  let html = '';
-  html += buildPositionTable('Quarterback', byPos.QB);
-  html += buildPositionTable('Running Back', byPos.RB);
-  html += buildPositionTable('Wide Receiver', byPos.WR);
-  html += buildPositionTable('Tight End', byPos.TE);
-
-  if (!html) {
-    html = '<div class="muted-text">No ROS-ranked players found for this team.</div>';
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    teamsContent.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    upgradeCard.style.display = 'none';
+    teamOwnerLabel.textContent = '';
+    return;
   }
 
-  container.innerHTML = html;
+  const rosterIdStr = teamSelect.value;
+  if (!rosterIdStr) {
+    teamsContent.innerHTML = '<div class="muted-text">Select a team to view its lineup.</div>';
+    upgradeCard.style.display = 'none';
+    teamOwnerLabel.textContent = '';
+    return;
+  }
 
-  // Free agents (top 5)
-  if (!upgradeCard || !upgradeContent) return;
-  const ownedSet = new Set(bundle.rosters.flatMap(r => r.players || []));
-  const candidates = (state.rosData || [])
-    .filter(r => r.sleeper_id && !ownedSet.has(r.sleeper_id))
-    .sort((a, b) => Number(a.Overall || a.rank || 9999) - Number(b.Overall || b.rank || 9999))
-    .slice(0, 5);
+  const rosterId = Number(rosterIdStr);
+  const roster = league.rosters.find(r => r.roster_id === rosterId);
+  if (!roster) {
+    teamsContent.innerHTML = '<div class="muted-text">Roster not found.</div>';
+    upgradeCard.style.display = 'none';
+    teamOwnerLabel.textContent = '';
+    return;
+  }
 
-  if (!candidates.length) {
+  const ownerUser = league.users.find(u => u.user_id === roster.owner_id);
+  const ownerName = ownerUser?.display_name || ownerUser?.username || 'Unknown owner';
+  teamOwnerLabel.textContent = `Owner: ${ownerName}`;
+
+  const allIds = new Set([
+    ...(roster.players || []),
+    ...(roster.taxi || []),
+    ...(roster.reserve || [])
+  ]);
+  const allPlayers = [...allIds]
+    .filter(id => id && id !== '0')
+    .map(playerWithRos)
+    .filter(Boolean);
+
+  if (!allPlayers.length) {
+    teamsContent.innerHTML = '<div class="muted-text">No players found for this team.</div>';
     upgradeCard.style.display = 'none';
     return;
   }
 
-  let upHtml = `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Player</th>
-          <th>Pos</th>
-          <th>Rank</th>
-          <th>Pos Rank</th>
-          <th>Tier</th>
-          <th>PPG</th>
-          <th>Bye</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
+  const posOrder = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'DST', 'K', 'IDP'];
+  const positionSortKey = p => {
+    const idx = posOrder.indexOf(p);
+    return idx === -1 ? 99 : idx;
+  };
 
-  candidates.forEach(r => {
-    const name = r.Player || r.player || 'Unknown';
-    const pos = r.Position || r.position || '';
-    const overall = Number(r.Overall || r.rank || '');
-    const posRank = Number(r['Positional Rank'] || r.pos_rank || '');
-    const tier = r.Tier || r.tier || '';
-    const ppg = Number(r.PPG || '');
-    const bye = r.Bye || '';
+  const sorted = [...allPlayers].sort((a, b) => {
+    const pa = positionSortKey(a.position);
+    const pb = positionSortKey(b.position);
+    if (pa !== pb) return pa - pb;
 
-    const overallBg = overall ? getGradientColor(overall, 1, 70, 150, false) : '';
-    const ppgBg = ppg ? getGradientColor(ppg, 8, 15, 30, false) : '';
+    const at = a.rosRow?.tier ?? 99;
+    const bt = b.rosRow?.tier ?? 99;
+    if (at !== bt) return at - bt;
 
-    upHtml += `
-      <tr class="row-fa">
-        <td>${name}</td>
-        <td>${pos}</td>
-        <td style="background:${overallBg}">${overall || ''}</td>
-        <td>${posRank || ''}</td>
-        <td>${tier || ''}</td>
-        <td style="background:${ppgBg}">${ppg || ''}</td>
-        <td>${bye || ''}</td>
-      </tr>
-    `;
+    const ar = a.rosRow?.rank ?? 9999;
+    const br = b.rosRow?.rank ?? 9999;
+    if (ar !== br) return ar - br;
+
+    return (a.displayName || '').localeCompare(b.displayName || '');
   });
 
-  upHtml += '</tbody></table>';
-  upgradeContent.innerHTML = upHtml;
+  const table = document.createElement('table');
+  table.className = 'table teams-table';
+
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Player</th>
+      <th>Rank</th>
+      <th>Pos Rank</th>
+      <th>Tier</th>
+      <th>PPG</th>
+      <th>Bye</th>
+      <th>ROS</th>
+      <th>Next 4</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  let lastPos = null;
+
+  sorted.forEach(p => {
+    if (p.position !== lastPos) {
+      const posRow = document.createElement('tr');
+      posRow.className = 'position-label-row';
+      const td = document.createElement('td');
+      td.colSpan = 8;
+      td.textContent = p.position || 'Pos';
+      posRow.appendChild(td);
+      tbody.appendChild(posRow);
+      lastPos = p.position;
+    }
+
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = p.displayName || p.rosRow?.player || p.sleeperName || 'Unknown';
+    tr.appendChild(tdName);
+
+    const tdRank = document.createElement('td');
+    tdRank.textContent = p.rosRow?.rank ?? '';
+    applyOverallRankColor(tdRank, p.rosRow?.rank);
+    tr.appendChild(tdRank);
+
+    const tdPosRank = document.createElement('td');
+    tdPosRank.textContent = p.rosRow?.pos_rank ?? '';
+    applyPosRankColor(tdPosRank, p.position, p.rosRow?.pos_rank);
+    tr.appendChild(tdPosRank);
+
+    const tdTier = document.createElement('td');
+    tdTier.textContent = p.rosRow?.tier ?? '';
+    tr.appendChild(tdTier);
+
+    const tdPpg = document.createElement('td');
+    tdPpg.textContent = p.rosRow?.ppg ?? '';
+    tr.appendChild(tdPpg);
+
+    const tdBye = document.createElement('td');
+    tdBye.textContent = p.rosRow?.bye ?? '';
+    applyByeColor(tdBye, p.rosRow?.bye);
+    tr.appendChild(tdBye);
+
+    const tdRos = document.createElement('td');
+    tdRos.textContent = p.rosRow?.ros ?? '';
+    applyScheduleColor(tdRos, p.rosRow?.ros, null);
+    tr.appendChild(tdRos);
+
+    const tdNext4 = document.createElement('td');
+    tdNext4.textContent = p.rosRow?.next4 ?? '';
+    applyScheduleColor(tdNext4, p.rosRow?.next4, null);
+    tr.appendChild(tdNext4);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  teamsContent.innerHTML = '';
+  teamsContent.appendChild(table);
+
+  const isMyTeam = roster.owner_id === myUserId;
+  if (isMyTeam && rosData.length) {
+    const ownershipContext = buildOwnershipContext(league);
+    renderTopFreeAgents(ownershipContext);
+  } else {
+    upgradeCard.style.display = 'none';
+  }
+}
+
+function playerWithRos(playerId) {
+  const p = playersById[playerId];
+  if (!p) return null;
+  const name = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  const rosRow = rosByName.get(key) || null;
+  const pos = rosRow?.position || p.position || 'FLEX';
+  return {
+    playerId,
+    sleeperName: name,
+    displayName: name,
+    rosRow,
+    position: pos
+  };
+}
+
+function renderTopFreeAgents(ownershipContext) {
+  const freeAgents = [];
+
+  rosData.forEach(row => {
+    const pid = lookupPlayerId(row.player, { position: row.position, team: row.team });
+    if (!pid) return;
+    if (!ownershipContext.playerToRoster.has(pid)) {
+      freeAgents.push(row);
+    }
+  });
+
+  if (!freeAgents.length) {
+    upgradeContent.innerHTML = '<div class="muted-text">No free agents found based on your ROS file and this league.</div>';
+    upgradeCard.style.display = 'block';
+    return;
+  }
+
+  freeAgents.sort((a, b) => {
+    const ar = a.rank ?? 9999;
+    const br = b.rank ?? 9999;
+    return ar - br;
+  });
+
+  const topFive = freeAgents.slice(0, 5);
+
+  const table = document.createElement('table');
+  table.className = 'table teams-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Player</th>
+      <th>Rank</th>
+      <th>Pos Rank</th>
+      <th>Tier</th>
+      <th>PPG</th>
+      <th>Bye</th>
+      <th>ROS</th>
+      <th>Next 4</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  topFive.forEach(row => {
+    const tr = document.createElement('tr');
+
+    const tdPlayer = document.createElement('td');
+    tdPlayer.textContent = row.player;
+    tr.appendChild(tdPlayer);
+
+    const tdRank = document.createElement('td');
+    tdRank.textContent = row.rank ?? '';
+    applyOverallRankColor(tdRank, row.rank);
+    tr.appendChild(tdRank);
+
+    const tdPosRank = document.createElement('td');
+    tdPosRank.textContent = row.pos_rank ?? '';
+    applyPosRankColor(tdPosRank, row.position, row.pos_rank);
+    tr.appendChild(tdPosRank);
+
+    const tdTier = document.createElement('td');
+    tdTier.textContent = row.tier ?? '';
+    tr.appendChild(tdTier);
+
+    const tdPpg = document.createElement('td');
+    tdPpg.textContent = row.ppg ?? '';
+    tr.appendChild(tdPpg);
+
+    const tdBye = document.createElement('td');
+    tdBye.textContent = row.bye ?? '';
+    applyByeColor(tdBye, row.bye);
+    tr.appendChild(tdBye);
+
+    const tdRos = document.createElement('td');
+    tdRos.textContent = row.ros ?? '';
+    applyScheduleColor(tdRos, row.ros, null);
+    tr.appendChild(tdRos);
+
+    const tdNext4 = document.createElement('td');
+    tdNext4.textContent = row.next4 ?? '';
+    applyScheduleColor(tdNext4, row.next4, null);
+    tr.appendChild(tdNext4);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  upgradeContent.innerHTML = '';
+  upgradeContent.appendChild(table);
   upgradeCard.style.display = 'block';
 }
 
-// --- This Week tab ---
+// THIS WEEK TAB
 
-function setupWeekControls() {
-  const posSelect = document.getElementById('weekPositionSelect');
-  if (!posSelect) return;
-  posSelect.onchange = () => renderWeekTab();
-}
-
-async function renderWeekTab() {
-  const container = document.getElementById('weekContent');
-  const posSelect = document.getElementById('weekPositionSelect');
-  if (!container) return;
-
-  if (!state.weekByPosition || !Object.keys(state.weekByPosition).length) {
-    container.innerHTML = '<div class="muted-text">Upload your This Week CSV to see rankings.</div>';
-    return;
-  }
-  const pos = posSelect?.value || 'QB';
-  const data = state.weekByPosition[pos] || [];
-  if (!data.length) {
-    container.innerHTML = `<div class="muted-text">No data loaded for ${pos}.</div>`;
+function renderWeekTab() {
+  if (!weekData.length) {
+    weekContent.innerHTML = '<div class="muted-text">Upload your This Week CSV to see positional tables.</div>';
     return;
   }
 
-  container.innerHTML = '';
-  const table = document.createElement('table');
-  table.className = 'data-table';
-  const isFlex = pos === 'FLEX';
-  const isDst = pos === 'DST';
+  const grouped = {};
+  weekData.forEach(row => {
+    const g = row.group || row.position || 'FLEX';
+    if (!grouped[g]) grouped[g] = [];
+    grouped[g].push(row);
+  });
 
-  let headHtml = '<tr><th>Rank</th><th>Player</th>';
-  if (!isDst) headHtml += '<th>Team</th>';
-  headHtml += '<th>Opp</th>';
-  if (isDst) headHtml += '<th>Spread</th>';
-  else headHtml += '<th>Proj</th>';
-  if (!isDst) headHtml += '<th>Match</th>';
-  if (!isDst && !isFlex) headHtml += '<th>Tier</th>';
-  if (isFlex) headHtml += '<th>Pos</th>';
-  headHtml += '</tr>';
+  const posFilter = weekPositionSelect ? (weekPositionSelect.value || 'QB') : 'QB';
+  const rows = grouped[posFilter] || [];
 
-  table.innerHTML = `<thead>${headHtml}</thead><tbody></tbody>`;
-  const tbody = table.querySelector('tbody');
-
-  // Precompute numeric ranges for proj + matchup
-  const projVals = data.map(d => d.total).filter(v => !isNaN(v));
-  const matchVals = data.map(d => d.matchup).filter(v => !isNaN(v));
-  const projMin = Math.min(...projVals, 0);
-  const projMax = Math.max(...projVals, 0);
-  const projMid = (projMin + projMax) / 2 || projMin || 1;
-  const matchMin = Math.min(...matchVals, 1);
-  const matchMax = Math.max(...matchVals, 32);
-  const matchMid = (matchMin + matchMax) / 2 || matchMin || 1;
-
-  // Ownership mapping
-  let ownership = null;
-  if (state.currentLeagueId) {
-    ownership = state.leagueData[state.currentLeagueId]?.ownership || null;
-  }
-
-  const dict = await loadSleeperPlayers();
-  const nameIndex = buildNameIndex(dict);
-
-  for (const row of data) {
-    const tr = document.createElement('tr');
-
-    let sleeperId = null;
-    const key = (row.name || '').toLowerCase().trim();
-    if (nameIndex[key]) sleeperId = nameIndex[key][0].player_id;
-
-    let rowClass = '';
-    if (ownership && sleeperId && ownership[sleeperId]) {
-      if (ownership[sleeperId].isMine) rowClass = 'row-mine';
-      else rowClass = '';
-    } else if (ownership && sleeperId && !ownership[sleeperId]) {
-      rowClass = 'row-fa';
-    }
-    if (rowClass) tr.classList.add(rowClass);
-
-    const projColor = !isDst && !isNaN(row.total)
-      ? getGradientColor(row.total, projMin, projMid, projMax, false)
-      : '';
-    const matchColor = !isDst && !isNaN(row.matchup)
-      ? getGradientColor(row.matchup, matchMin, matchMid, matchMax, true)
-      : '';
-
-    let rowHtml = `<td>${row.rank || ''}</td><td>${row.name || ''}</td>`;
-    if (!isDst) rowHtml += `<td>${row.team || ''}</td>`;
-    rowHtml += `<td>${row.opp || ''}</td>`;
-    if (isDst) {
-      rowHtml += `<td style="background:${projColor}">${isNaN(row.spread) ? '' : row.spread}</td>`;
-    } else {
-      rowHtml += `<td style="background:${projColor}">${isNaN(row.total) ? '' : row.total}</td>`;
-    }
-    if (!isDst) {
-      rowHtml += `<td style="background:${matchColor}">${isNaN(row.matchup) ? '' : row.matchup}</td>`;
-    }
-    if (!isDst && !isFlex) {
-      rowHtml += `<td>${row.tier || ''}</td>`;
-    }
-    if (isFlex) {
-      rowHtml += `<td>${row.pos || ''}</td>`;
-    }
-
-    tr.innerHTML = rowHtml;
-    tbody.appendChild(tr);
-  }
-
-  container.appendChild(table);
-}
-
-// --- ROS tab ---
-
-async function renderRosTab() {
-  const container = document.getElementById('rosContent');
-  if (!container) return;
-  if (!state.rosData) {
-    container.innerHTML = '<div class="muted-text">Upload your ROS CSV to see the big board.</div>';
+  if (!rows.length) {
+    weekContent.innerHTML = `<div class="muted-text">No data for ${posFilter} in this week's CSV.</div>`;
     return;
   }
 
-  await attachSleeperIdsToRos();
-  await loadNflState();
+  rows.sort((a, b) => {
+    const ar = a.rank;
+    const br = b.rank;
+    if (Number.isFinite(ar) && Number.isFinite(br) && ar !== br) {
+      return ar - br;
+    }
+    if (Number.isFinite(ar) && !Number.isFinite(br)) return -1;
+    if (!Number.isFinite(ar) && Number.isFinite(br)) return 1;
 
-  const rows = [...state.rosData].sort(
-    (a, b) => Number(a.Overall || a.rank || 9999) - Number(b.Overall || b.rank || 9999)
-  );
+    const at = a.tier ?? 99;
+    const bt = b.tier ?? 99;
+    if (at !== bt) return at - bt;
+
+    const ap = a.proj_points ?? 0;
+    const bp = b.proj_points ?? 0;
+    return bp - ap;
+  });
 
   const table = document.createElement('table');
-  table.className = 'data-table';
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Rank</th>
-        <th>Player</th>
-        <th>Pos</th>
-        <th>Pos Rank</th>
-        <th>Tier</th>
-        <th>Team</th>
-        <th>ROS</th>
-        <th>Next 4</th>
-        <th>PPG</th>
-        <th>Bye</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
+  table.className = 'table week-table';
+
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Rank</th>
+      <th>${posFilter}</th>
+      <th>Opp</th>
+      <th>Proj</th>
+      <th>Match</th>
+      <th>Tier</th>
+    </tr>
   `;
-  const tbody = table.querySelector('tbody');
+  table.appendChild(thead);
 
-  const currentWeek = state.nflState?.week || 1;
+  const tbody = document.createElement('tbody');
 
-  let ownership = null;
-  if (state.currentLeagueId) {
-    ownership = state.leagueData[state.currentLeagueId]?.ownership || null;
+  const projVals = rows.map(r => r.proj_points).filter(isFinite);
+  const matchupVals = rows.map(r => r.matchup).filter(isFinite);
+
+  const projSummary = summarizeSeries(projVals);
+  const matchupSummary = summarizeSeries(matchupVals);
+
+  let ownershipContext = null;
+  if (activeLeagueId) {
+    const league = leaguesMap.get(activeLeagueId);
+    if (league) {
+      ownershipContext = buildOwnershipContext(league);
+    }
   }
 
-  const rosVals = rows
-    .map(r => Number(r.ROS || r['ROS']))
-    .filter(v => !isNaN(v));
-  const nextVals = rows
-    .map(r => Number(r['Next 4'] || r.Next4))
-    .filter(v => !isNaN(v));
-  const ppgVals = rows
-    .map(r => Number(r.PPG))
-    .filter(v => !isNaN(v));
-
-  const rosMin = Math.min(...rosVals, 1);
-  const rosMax = Math.max(...rosVals, 32);
-  const rosMid = (rosMin + rosMax) / 2 || rosMin || 1;
-
-  const nextMin = rosMin;
-  const nextMax = rosMax;
-  const nextMid = rosMid;
-
-  const ppgMin = Math.min(...ppgVals, 5);
-  const ppgMax = Math.max(...ppgVals, 30);
-  const ppgMid = (ppgMin + ppgMax) / 2 || ppgMin || 1;
+  let lastTier = null;
 
   rows.forEach(r => {
     const tr = document.createElement('tr');
 
-    const pid = r.sleeper_id;
-    let rowClass = '';
-    if (ownership && pid && ownership[pid]) {
-      rowClass = ownership[pid].isMine ? 'row-mine' : '';
-    } else if (ownership && pid && !ownership[pid]) {
-      rowClass = 'row-fa';
-    }
-    if (rowClass) tr.classList.add(rowClass);
-
-    const rank = Number(r.Overall || r.rank || '');
-    const pos = r.Position || r.position || '';
-    const posRank = Number(r['Positional Rank'] || r.pos_rank || '');
-    const tier = r.Tier || r.tier || '';
-    const team = r.Team || r.team || '';
-    const ros = Number(r.ROS || r['ROS'] || '');
-    const next4 = Number(r['Next 4'] || r.Next4 || '');
-    const ppg = Number(r.PPG || '');
-    const bye = Number(r.Bye || '');
-
-    const rosBg = !isNaN(ros) ? getGradientColor(ros, rosMin, rosMid, rosMax, true) : '';
-    const nextBg = !isNaN(next4) ? getGradientColor(next4, nextMin, nextMid, nextMax, true) : '';
-    const ppgBg = !isNaN(ppg) ? getGradientColor(ppg, ppgMin, ppgMid, ppgMax, false) : '';
-
-    let byeHtml = '';
-    if (!isNaN(bye) && bye > 0) {
-      if (bye < currentWeek) {
-        byeHtml = `<span class="bye-cell"><span class="bye-check">✔</span>${bye}</span>`;
-      } else if (bye === currentWeek) {
-        byeHtml = `<span class="bye-cell"><span class="bye-x">✖</span>${bye}</span>`;
-      } else {
-        byeHtml = String(bye);
-      }
+    if (ownershipContext) {
+      const status = getOwnershipStatus(r.player, r.position, r.team, ownershipContext);
+      if (status === 'MINE') tr.classList.add('row-mine');
+      else if (status === 'FA') tr.classList.add('row-fa');
     }
 
-    tr.innerHTML = `
-      <td>${isNaN(rank) ? '' : rank}</td>
-      <td>${r.Player || r.player || 'Unknown'}</td>
-      <td>${pos}</td>
-      <td>${isNaN(posRank) ? '' : posRank}</td>
-      <td>${tier}</td>
-      <td>${team}</td>
-      <td style="background:${rosBg}">${isNaN(ros) ? '' : ros}</td>
-      <td style="background:${nextBg}">${isNaN(next4) ? '' : next4}</td>
-      <td style="background:${ppgBg}">${isNaN(ppg) ? '' : ppg}</td>
-      <td>${byeHtml}</td>
-    `;
+    if (r.tier != null && r.tier !== lastTier) {
+      const tierRow = document.createElement('tr');
+      tierRow.className = 'tier-label-row';
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      td.textContent = `Tier ${r.tier}`;
+      tierRow.appendChild(td);
+      tbody.appendChild(tierRow);
+      lastTier = r.tier;
+    }
+
+    const tdRank = document.createElement('td');
+    tdRank.textContent = r.rank ?? '';
+    tr.appendChild(tdRank);
+
+    const tdPlayer = document.createElement('td');
+    tdPlayer.textContent = r.player;
+    tr.appendChild(tdPlayer);
+
+    const tdOpp = document.createElement('td');
+    tdOpp.textContent = r.opponent;
+    tr.appendChild(tdOpp);
+
+    const tdProj = document.createElement('td');
+    tdProj.textContent = r.proj_points ?? '';
+    applyProjectionColor(tdProj, r.proj_points, projSummary);
+    tr.appendChild(tdProj);
+
+    const tdMatch = document.createElement('td');
+    tdMatch.textContent = r.matchup ?? '';
+    applyMatchupColor(tdMatch, r.matchup, matchupSummary);
+    tr.appendChild(tdMatch);
+
+    const tdTier = document.createElement('td');
+    tdTier.textContent = r.tier ?? '';
+    tr.appendChild(tdTier);
+
     tbody.appendChild(tr);
   });
 
-  container.innerHTML = '';
-  const wrapper = document.createElement('div');
-  wrapper.className = 'table-scroll-x';
-  wrapper.appendChild(table);
-  container.appendChild(wrapper);
+  table.appendChild(tbody);
+  weekContent.innerHTML = '';
+  weekContent.appendChild(table);
 }
 
-// --- Power Rankings helpers & rendering ---
+// ROS TAB
 
-function rankArray(arr, key, asc = true) {
-  const sorted = [...arr].sort((a, b) => {
-    const av = a[key];
-    const bv = b[key];
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return asc ? av - bv : bv - av;
-  });
-  const ranks = new Map();
-  sorted.forEach((item, idx) => {
-    ranks.set(item.roster_id, idx + 1);
-  });
-  return ranks;
-}
-
-function computePfAndStandingRanks(teams) {
-  const pfSource = teams.map(t => ({
-    roster_id: t.roster_id,
-    pfValue: t.pf
-  }));
-  const pfRanks = rankArray(pfSource, 'pfValue', false);
-
-  const sorted = [...teams].sort((a, b) => {
-    if (b.wins !== a.wins) return b.wins - a.wins;
-    return b.pf - a.pf;
-  });
-  const standRanks = new Map();
-  sorted.forEach((t, i) => {
-    standRanks.set(t.roster_id, i + 1);
-  });
-
-  return { pfRanks, standRanks };
-}
-
-function computeAllPlayRanks(teams, matchupsByWeek, weeks) {
-  const scoresByRoster = {};
-  teams.forEach(t => {
-    scoresByRoster[t.roster_id] = [];
-  });
-
-  weeks.forEach(week => {
-    const matchups = matchupsByWeek[week] || [];
-    const byRoster = {};
-    matchups.forEach(m => {
-      if (!byRoster[m.roster_id]) byRoster[m.roster_id] = 0;
-      const pts = (m.points || 0) + (m.points_decimal || 0) / 100;
-      byRoster[m.roster_id] = pts;
-    });
-    const weekScores = Object.entries(byRoster).map(([rid, pts]) => ({
-      roster_id: Number(rid),
-      pts
-    }));
-    weekScores.sort((a, b) => b.pts - a.pts);
-
-    weekScores.forEach((entry, idx) => {
-      const rank = idx + 1;
-      scoresByRoster[entry.roster_id]?.push(rank);
-    });
-  });
-
-  const src = teams.map(t => {
-    const ranks = scoresByRoster[t.roster_id] || [];
-    if (!ranks.length) return { roster_id: t.roster_id, avgPlace: 999 };
-    const avg = ranks.reduce((a, b) => a + b, 0) / ranks.length;
-    return { roster_id: t.roster_id, avgPlace: avg };
-  });
-
-  return rankArray(src, 'avgPlace', true);
-}
-
-function computeTop8AndScheduleRanks(teams) {
-  const top8Source = [];
-  const rosSchedSource = [];
-
-  teams.forEach(team => {
-    const rosEntries = (team.players || [])
-      .map(pid => findRosByPlayerId(pid))
-      .filter(Boolean);
-
-    if (!rosEntries.length) {
-      top8Source.push({ roster_id: team.roster_id, top8Score: null });
-      rosSchedSource.push({ roster_id: team.roster_id, rosSchedScore: null });
-      return;
-    }
-
-    const sortedByRos = [...rosEntries].sort((a, b) => {
-      const ar = Number(a.Overall || a.rank || 9999);
-      const br = Number(b.Overall || b.rank || 9999);
-      return ar - br;
-    });
-
-    const top8 = sortedByRos.slice(0, 8);
-    let top8Score = 0;
-    const schedVals = [];
-
-    top8.forEach(p => {
-      const rosRank = Number(p.Overall || p.rank || 9999);
-      const sched = Number(p.ROS || p['ROS'] || 16);
-      if (!isNaN(rosRank)) top8Score += 200 - rosRank;
-      if (!isNaN(sched)) schedVals.push(sched);
-    });
-
-    const rosAvg = schedVals.length
-      ? schedVals.reduce((a, b) => a + b, 0) / schedVals.length
-      : 16;
-
-    top8Source.push({ roster_id: team.roster_id, top8Score });
-    rosSchedSource.push({ roster_id: team.roster_id, rosSchedScore: rosAvg });
-  });
-
-  const top8Ranks = rankArray(top8Source, 'top8Score', false);
-  const rosSchedRanks = rankArray(rosSchedSource, 'rosSchedScore', true);
-
-  return { top8Ranks, rosSchedRanks };
-}
-
-function computeFinalPowerRanks(teams, metrics) {
-  const { pfRanks, standRanks, allPlayRanks, top8Ranks, rosSchedRanks } = metrics;
-
-  const composite = teams.map(t => {
-    const rId = t.roster_id;
-    const pf = pfRanks.get(rId) || 999;
-    const st = standRanks.get(rId) || 999;
-    const ap = allPlayRanks.get(rId) || 999;
-    const t8 = top8Ranks.get(rId) || 999;
-    const rs = rosSchedRanks.get(rId) || 999;
-    const score = pf * 0.3 + ap * 0.25 + st * 0.2 + t8 * 0.2 + rs * 0.05;
-    return {
-      roster_id: rId,
-      pfRank: pf,
-      standRank: st,
-      allPlayRank: ap,
-      top8Rank: t8,
-      rosSchedRank: rs,
-      compositeScore: score
-    };
-  });
-
-  composite.sort((a, b) => a.compositeScore - b.compositeScore);
-  const powerRanks = new Map();
-  composite.forEach((item, idx) => {
-    powerRanks.set(item.roster_id, idx + 1);
-  });
-  return powerRanks;
-}
-
-function buildPowerNote(entry) {
-  const pf = entry.pfRank;
-  const ap = entry.allPlayRank;
-  const st = entry.standRank;
-  const rs = entry.rosSchedRank;
-  const t8 = entry.top8Rank;
-  const lines = [];
-
-  lines.push(`PF: ${pf} | All-Play (3W): ${ap}`);
-  lines.push(`Standings: ${st} | ROS Sched: ${rs}`);
-  lines.push(`Top-8 ROS Strength: ${t8}`);
-
-  let overall;
-  if (t8 <= 3 && pf <= 3) {
-    overall = 'Overall: Elite lineup with top-tier scoring.';
-  } else if (pf <= 4 && ap <= 4) {
-    overall = 'Overall: Strong scoring with consistent weekly finishes.';
-  } else if (st <= 4 && rs <= 4) {
-    overall = 'Overall: Well-positioned in standings with favorable schedule.';
-  } else if (pf >= 8 && st >= 8) {
-    overall = 'Overall: Needs help in both scoring and results.';
-  } else if (ap >= 8) {
-    overall = 'Overall: Recent form has trended down over the last 3 weeks.';
-  } else {
-    overall = 'Overall: Competitive team with room to improve.';
-  }
-  lines.push(overall);
-  return lines.join('\n');
-}
-
-function loadPreviousPowerRanks(leagueId) {
-  return loadJson(`power_ranks_${leagueId}`, null);
-}
-
-function saveCurrentPowerRanks(leagueId, entries) {
-  const simple = entries.map(e => ({
-    roster_id: e.roster_id,
-    rank: e.rank
-  }));
-  saveJson(`power_ranks_${leagueId}`, simple);
-}
-
-function getLeagueConfig(leagueId) {
-  const conf = loadJson('league_config', {});
-  return conf[leagueId] || {};
-}
-
-function renderPowerRankingsTable(leagueId) {
-  const bundle = state.leagueData[leagueId];
-  if (!bundle || !bundle.power) return;
-  const { teams, entries } = bundle.power;
-  const table = document.getElementById('power-rankings-table');
-  if (!table) return;
-
-  let sortedEntries = [...entries];
-  const { column, direction } = state.powerSort;
-  if (column !== 'rank') {
-    sortedEntries.sort((a, b) => {
-      const av = a[column];
-      const bv = b[column];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return direction === 'asc' ? av - bv : bv - av;
-    });
-  } else {
-    sortedEntries.sort((a, b) => a.rank - b.rank);
-  }
-
-  const leagueConfig = getLeagueConfig(leagueId);
-  const primaryColor = leagueConfig.primaryColor || '#222631';
-
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th data-sort="rank">Rank</th>
-        <th>Team</th>
-        <th data-sort="change">Δ</th>
-        <th data-sort="pfRank">PF</th>
-        <th data-sort="allPlayRank">All-Play</th>
-        <th data-sort="standRank">Stand</th>
-        <th data-sort="rosSchedRank">ROS Sched</th>
-        <th data-sort="top8Rank">ROS Top-8</th>
-        <th>Notes</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector('tbody');
-
-  sortedEntries.forEach(entry => {
-    const team = teams.find(t => t.roster_id === entry.roster_id);
-    if (!team) return;
-
-    const change = entry.change;
-    let changeText = '';
-    if (change > 0) changeText = `▲${change}`;
-    else if (change < 0) changeText = `▼${Math.abs(change)}`;
-    else changeText = '–';
-
-    const tr = document.createElement('tr');
-    tr.classList.add('power-row');
-
-    tr.innerHTML = `
-      <td class="pr-rank">${entry.rank}</td>
-      <td class="pr-team">
-        <div class="pr-team-pill" style="background:${primaryColor};padding:4px 8px;border-radius:999px;">
-          <span class="pr-team-name">${team.name}</span>
-        </div>
-      </td>
-      <td class="pr-change">${changeText}</td>
-      <td class="pr-metric">${entry.pfRank}</td>
-      <td class="pr-metric">${entry.allPlayRank}</td>
-      <td class="pr-metric">${entry.standRank}</td>
-      <td class="pr-metric">${entry.rosSchedRank}</td>
-      <td class="pr-metric">${entry.top8Rank}</td>
-      <td class="pr-notes"><pre>${entry.notes}</pre></td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  const headers = table.querySelectorAll('th[data-sort]');
-  headers.forEach(th => {
-    const key = th.getAttribute('data-sort');
-    th.style.cursor = 'pointer';
-    th.onclick = () => {
-      if (key === 'rank') {
-        state.powerSort = { column: 'rank', direction: 'asc' };
-      } else {
-        if (state.powerSort.column === key) {
-          state.powerSort.direction =
-            state.powerSort.direction === 'asc' ? 'desc' : 'asc';
-        } else {
-          state.powerSort = { column: key, direction: 'asc' };
-        }
-      }
-      renderPowerRankingsTable(leagueId);
-    };
-  });
-}
-
-function buildPresentationOverlay(leagueId) {
-  const overlay = document.getElementById('power-presentation-overlay');
-  if (!overlay) return;
-  const bundle = state.leagueData[leagueId];
-  if (!bundle || !bundle.power) return;
-  const { teams, entries } = bundle.power;
-
-  const leagueConfig = getLeagueConfig(leagueId);
-  const logoUrl = leagueConfig.logoUrl || '';
-  const week = state.nflState?.week || 'Current';
-
-  const sortedByRank = [...entries].sort((a, b) => a.rank - b.rank);
-  const order = [];
-  for (let i = sortedByRank.length - 1; i >= 0; i--) order.push(sortedByRank[i]);
-
-  overlay.innerHTML = `
-    <div class="power-present-inner">
-      <div class="power-present-content">
-        <div id="power-present-slide"></div>
-        <button id="power-present-next" class="btn btn-primary">Next</button>
-      </div>
-    </div>
-  `;
-  const slideEl = document.getElementById('power-present-slide');
-  const nextBtn = document.getElementById('power-present-next');
-
-  let step = -1;
-
-  function renderStep() {
-    if (step === -1) {
-      slideEl.innerHTML = `
-        <div class="power-header-slide">
-          ${logoUrl ? `<img src="${logoUrl}" class="power-league-logo" />` : ''}
-          <h1 class="power-header-title">Week ${week} Power Rankings</h1>
-        </div>
-      `;
-      return;
-    }
-    const entry = order[step];
-    if (!entry) return;
-    const team = teams.find(t => t.roster_id === entry.roster_id);
-    if (!team) return;
-
-    slideEl.innerHTML = `
-      <div class="power-team-slide">
-        <div class="power-team-rank">#${entry.rank}</div>
-        <div class="power-team-name">${team.name}</div>
-        <div class="power-team-metrics">
-          <div>Points For: ${entry.pfRank}</div>
-          <div>All-Play (3W): ${entry.allPlayRank}</div>
-          <div>Standings: ${entry.standRank}</div>
-          <div>ROS Schedule: ${entry.rosSchedRank}</div>
-          <div>ROS Top-8 Strength: ${entry.top8Rank}</div>
-        </div>
-        <div class="power-team-notes">
-          ${entry.notes
-            .split('\n')
-            .map(line => `<div>${line}</div>`)
-            .join('')}
-        </div>
-      </div>
-    `;
-  }
-
-  nextBtn.onclick = () => {
-    if (step < order.length - 1) {
-      step++;
-      renderStep();
-    } else {
-      overlay.classList.remove('active');
-    }
-  };
-
-  step = -1;
-  renderStep();
-}
-
-function setupPresentationToggle() {
-  const toggle = document.getElementById('power-presentation-toggle');
-  const overlay = document.getElementById('power-presentation-overlay');
-  if (!toggle || !overlay) return;
-  toggle.onclick = () => {
-    if (!state.currentLeagueId) return;
-    buildPresentationOverlay(state.currentLeagueId);
-    overlay.classList.add('active');
-  };
-}
-
-async function computeAndRenderPowerRankings(leagueId) {
-  if (!state.rosData) {
-    const tbl = document.getElementById('power-rankings-table');
-    if (tbl) {
-      tbl.innerHTML = `
-        <thead>
-          <tr>
-            <th>Rank</th><th>Team</th><th>Δ</th>
-            <th>PF</th><th>All-Play</th><th>Stand</th>
-            <th>ROS Sched</th><th>ROS Top-8</th><th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td colspan="9">Upload ROS CSV to generate power rankings.</td></tr>
-        </tbody>
-      `;
-    }
+function renderRosTab() {
+  if (!rosData.length) {
+    rosContent.innerHTML = '<div class="muted-text">Upload your ROS CSV to see the big board.</div>';
     return;
   }
 
-  await attachSleeperIdsToRos();
-  await loadNflState();
-  const bundle = await loadLeagueBundle(leagueId);
-  const teams = mapRostersWithUsers(bundle);
+  const sorted = [...rosData].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999));
 
-  const currentWeek = state.nflState?.week || 1;
-  const weeks = [];
-  for (let w = currentWeek; w > currentWeek - 3 && w > 0; w--) weeks.push(w);
-  await loadMatchupsForWeeks(leagueId, weeks);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-section';
 
-  const { pfRanks, standRanks } = computePfAndStandingRanks(teams);
-  const allPlayRanks = computeAllPlayRanks(teams, bundle.matchupsByWeek, weeks);
-  const { top8Ranks, rosSchedRanks } = computeTop8AndScheduleRanks(teams);
-  const powerRanks = computeFinalPowerRanks(teams, {
-    pfRanks,
-    standRanks,
-    allPlayRanks,
-    top8Ranks,
-    rosSchedRanks
-  });
+  const table = document.createElement('table');
+  table.className = 'table ros-table';
 
-  const prev = loadPreviousPowerRanks(leagueId) || [];
-  const prevMap = new Map();
-  prev.forEach(p => prevMap.set(p.roster_id, p.rank));
-
-  const entries = teams.map(t => {
-    const rId = t.roster_id;
-    const rank = powerRanks.get(rId) || 999;
-    const entry = {
-      roster_id: rId,
-      rank,
-      pfRank: pfRanks.get(rId) || 10,
-      standRank: standRanks.get(rId) || 10,
-      allPlayRank: allPlayRanks.get(rId) || 10,
-      top8Rank: top8Ranks.get(rId) || 10,
-      rosSchedRank: rosSchedRanks.get(rId) || 10,
-      change: 0,
-      notes: ''
-    };
-    const prevRank = prevMap.get(rId);
-    if (typeof prevRank === 'number') {
-      entry.change = prevRank - rank;
-    } else {
-      entry.change = 0;
+  let ownershipContext = null;
+  if (activeLeagueId) {
+    const league = leaguesMap.get(activeLeagueId);
+    if (league) {
+      ownershipContext = buildOwnershipContext(league);
     }
-    entry.notes = buildPowerNote(entry);
-    return entry;
+  }
+
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Rank</th>
+      <th>Player</th>
+      <th>Pos</th>
+      <th>Pos Rank</th>
+      <th>Tier</th>
+      <th>Move</th>
+      <th>ROS</th>
+      <th>Next 4</th>
+      <th>PPG</th>
+      <th>Bye</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  const rosVals = sorted.map(r => r.ros).filter(isFinite);
+  const next4Vals = sorted.map(r => r.next4).filter(isFinite);
+  const ppgVals = sorted.map(r => r.ppg).filter(isFinite);
+
+  const rosSummary = summarizeSeries(rosVals);
+  const next4Summary = summarizeSeries(next4Vals);
+  const ppgSummary = summarizeSeries(ppgVals);
+
+  let lastTier = null;
+
+  sorted.forEach(row => {
+    const tr = document.createElement('tr');
+
+    if (ownershipContext) {
+      const status = getOwnershipStatus(row.player, row.position, row.team, ownershipContext);
+      if (status === 'MINE') tr.classList.add('row-mine');
+      else if (status === 'FA') tr.classList.add('row-fa');
+    }
+
+    if (row.tier != null && row.tier !== lastTier) {
+      const tierRow = document.createElement('tr');
+      tierRow.className = 'tier-label-row';
+      const td = document.createElement('td');
+      td.colSpan = 10;
+      td.textContent = `Tier ${row.tier}`;
+      tierRow.appendChild(td);
+      tbody.appendChild(tierRow);
+      lastTier = row.tier;
+    }
+
+    const tdRank = document.createElement('td');
+    tdRank.textContent = row.rank ?? '';
+    tr.appendChild(tdRank);
+
+    const tdPlayer = document.createElement('td');
+    tdPlayer.textContent = row.player;
+    tr.appendChild(tdPlayer);
+
+    const tdPos = document.createElement('td');
+    tdPos.textContent = row.position;
+    tr.appendChild(tdPos);
+
+    const tdPosRank = document.createElement('td');
+    tdPosRank.textContent = row.pos_rank ?? '';
+    tr.appendChild(tdPosRank);
+
+    const tdTier = document.createElement('td');
+    tdTier.textContent = row.tier ?? '';
+    tr.appendChild(tdTier);
+
+    const tdMove = document.createElement('td');
+    setMoveCell(tdMove, row.move);
+    tr.appendChild(tdMove);
+
+    const tdRos = document.createElement('td');
+    tdRos.textContent = row.ros ?? '';
+    applyScheduleColor(tdRos, row.ros, rosSummary);
+    tr.appendChild(tdRos);
+
+    const tdNext4 = document.createElement('td');
+    tdNext4.textContent = row.next4 ?? '';
+    applyScheduleColor(tdNext4, row.next4, next4Summary);
+    tr.appendChild(tdNext4);
+
+    const tdPpg = document.createElement('td');
+    tdPpg.textContent = row.ppg ?? '';
+    applyProjectionColor(tdPpg, row.ppg, ppgSummary);
+    tr.appendChild(tdPpg);
+
+    const tdBye = document.createElement('td');
+    tdBye.textContent = row.bye ?? '';
+    applyByeColor(tdBye, row.bye);
+    tr.appendChild(tdBye);
+
+    tbody.appendChild(tr);
   });
 
-  entries.sort((a, b) => a.rank - b.rank);
-  bundle.power = { teams, entries };
-  saveCurrentPowerRanks(leagueId, entries);
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
 
-  state.powerSort = { column: 'rank', direction: 'asc' };
-  renderPowerRankingsTable(leagueId);
+  rosContent.innerHTML = '';
+  rosContent.appendChild(wrapper);
 }
 
-// --- Admin config (colors + logos) ---
+// POWER RANKINGS TAB
 
-function setupAdminConfig() {
-  const container = document.getElementById('admin-league-config');
-  const saveBtn = document.getElementById('admin-save-config');
-  if (!container || !saveBtn) return;
+async function renderPowerTab() {
+  if (!powerTableContainer) return;
 
-  const existing = loadJson('league_config', {});
-  container.innerHTML = '';
+  if (!activeLeagueId) {
+    powerTableContainer.innerHTML = '<div class="muted-text">Select a league to view power rankings.</div>';
+    return;
+  }
 
-  LEAGUES.forEach(lg => {
-    const conf = existing[lg.id] || {};
-    const row = document.createElement('div');
-    row.className = 'admin-league-row';
-    row.innerHTML = `
-      <div class="admin-league-name">${lg.name}</div>
-      <label>
-        Primary Color (hex)
-        <input type="text" class="admin-color" data-league="${lg.id}" value="${conf.primaryColor || '#222631'}" />
-      </label>
-      <label>
-        Logo URL or Path
-        <input type="text" class="admin-logo" data-league="${lg.id}" value="${conf.logoUrl || ''}" />
-      </label>
+  if (!rosData.length) {
+    powerTableContainer.innerHTML = '<div class="muted-text">Upload your ROS CSV to generate power rankings.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    powerTableContainer.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  powerTableContainer.innerHTML = '<div class="muted-text">Calculating power rankings...</div>';
+
+  try {
+    const powerRows = await computePowerRankingsForLeague(activeLeagueId);
+
+    if (!powerRows || !powerRows.length) {
+      powerTableContainer.innerHTML = '<div class="muted-text">Not enough data to compute power rankings.</div>';
+      return;
+    }
+
+    const prevKey = `fantasy_power_prev_${activeLeagueId}`;
+    let prevMap = new Map();
+    try {
+      const prevJson = localStorage.getItem(prevKey);
+      if (prevJson) {
+        const prevArr = JSON.parse(prevJson);
+        if (Array.isArray(prevArr)) {
+          prevArr.forEach(p => {
+            if (p && p.roster_id != null && p.rank != null) {
+              prevMap.set(p.roster_id, p.rank);
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading previous power ranks', e);
+    }
+
+    powerRows.sort((a, b) => a.powerScore - b.powerScore);
+    powerRows.forEach((row, idx) => {
+      row.rank = idx + 1;
+    });
+
+    powerRows.forEach(row => {
+      const prevRank = prevMap.get(row.roster_id);
+      if (Number.isFinite(prevRank)) {
+        row.change = prevRank - row.rank;
+      } else {
+        row.change = null;
+      }
+    });
+
+    try {
+      const toStore = powerRows.map(r => ({ roster_id: r.roster_id, rank: r.rank }));
+      localStorage.setItem(prevKey, JSON.stringify(toStore));
+    } catch (e) {
+      console.warn('Error storing power ranks', e);
+    }
+
+    lastPowerRows = powerRows;
+    powerRevealOrder = [...powerRows].sort((a, b) => b.rank - a.rank);
+
+    const table = document.createElement('table');
+    table.className = 'table power-table';
+
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr>
+        <th>Rank</th>
+        <th>Team</th>
+        <th>Change</th>
+        <th>Standing</th>
+        <th>All-Play</th>
+        <th>Notes</th>
+      </tr>
     `;
-    container.appendChild(row);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    const notesMap = loadPowerNotes(activeLeagueId);
+
+    powerRows.forEach(row => {
+      const tr = document.createElement('tr');
+
+      const colorMeta = getTeamColorMeta(row.teamName, activeLeagueId);
+
+      const tdRank = document.createElement('td');
+      tdRank.textContent = row.rank;
+      tdRank.classList.add('power-rank-cell');
+      tr.appendChild(tdRank);
+
+      const tdTeam = document.createElement('td');
+      tdTeam.textContent = row.teamName;
+      tdTeam.classList.add('power-team-cell');
+      tdTeam.style.background = colorMeta.gradient;
+      tdTeam.style.color = '#ffffff';
+      tr.appendChild(tdTeam);
+
+      const tdChange = document.createElement('td');
+      if (!Number.isFinite(row.change) || row.change === 0) {
+        tdChange.textContent = '–';
+      } else if (row.change > 0) {
+        tdChange.textContent = `▲${row.change}`;
+        tdChange.style.color = '#00D26A';
+      } else {
+        tdChange.textContent = `▼${Math.abs(row.change)}`;
+        tdChange.style.color = '#E74C3C';
+      }
+      tr.appendChild(tdChange);
+
+      const tdStanding = document.createElement('td');
+      tdStanding.textContent = row.standingRank ?? '';
+      tr.appendChild(tdStanding);
+
+      const tdAllPlay = document.createElement('td');
+      tdAllPlay.textContent = row.allPlayRank ?? '';
+      tr.appendChild(tdAllPlay);
+
+      const tdNotes = document.createElement('td');
+      const noteKey = String(row.roster_id);
+      const textarea = document.createElement('textarea');
+      textarea.className = 'power-note-input';
+      textarea.value = notesMap[noteKey] || '';
+      textarea.dataset.rosterId = noteKey;
+      textarea.addEventListener('input', () => {
+        notesMap[noteKey] = textarea.value;
+        savePowerNotes(activeLeagueId, notesMap);
+      });
+      tdNotes.appendChild(textarea);
+      tr.appendChild(tdNotes);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+
+    powerTableContainer.innerHTML = '';
+    powerTableContainer.appendChild(table);
+
+    if (!powerAdminPanel.classList.contains('hidden')) {
+      renderPowerAdminPanel();
+    }
+  } catch (e) {
+    console.error(e);
+    powerTableContainer.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
+  }
+}
+
+// POWER NOTES STORAGE
+
+function loadPowerNotes(leagueId) {
+  try {
+    const raw = localStorage.getItem(`fantasy_power_notes_${leagueId}`);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePowerNotes(leagueId, notesObj) {
+  try {
+    localStorage.setItem(`fantasy_power_notes_${leagueId}`, JSON.stringify(notesObj));
+  } catch (e) {
+    console.warn('Unable to store power notes', e);
+  }
+}
+
+// TEAM COLORS & LOGOS STORAGE
+
+function loadTeamColors(leagueId) {
+  try {
+    const raw = localStorage.getItem(`fantasy_team_colors_${leagueId}`);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTeamColors(leagueId, colorsObj) {
+  try {
+    localStorage.setItem(`fantasy_team_colors_${leagueId}`, JSON.stringify(colorsObj));
+  } catch (e) {
+    console.warn('Unable to store team colors', e);
+  }
+}
+
+function loadLeagueLogo(leagueId) {
+  try {
+    return localStorage.getItem(`fantasy_league_logo_${leagueId}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLeagueLogo(leagueId, dataUrl) {
+  try {
+    localStorage.setItem(`fantasy_league_logo_${leagueId}`, dataUrl);
+  } catch (e) {
+    console.warn('Unable to store league logo', e);
+  }
+}
+
+// ADMIN PANEL (POWER TAB)
+
+function renderPowerAdminPanel() {
+  if (!powerAdminPanel) return;
+
+  if (!activeLeagueId) {
+    powerAdminPanel.innerHTML = '<div class="admin-panel-title">Admin</div><div class="muted-text">Select a league to edit settings.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    powerAdminPanel.innerHTML = '<div class="admin-panel-title">Admin</div><div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  const { rosters, users } = league;
+  const usersById = new Map();
+  users.forEach(u => usersById.set(u.user_id, u));
+
+  const teams = rosters.map(r => {
+    const ownerUser = usersById.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    return {
+      roster_id: r.roster_id,
+      displayName
+    };
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const colors = loadTeamColors(activeLeagueId);
+  const logoUrl = loadLeagueLogo(activeLeagueId);
+
+  const wrapper = document.createElement('div');
+
+  const title = document.createElement('div');
+  title.className = 'admin-panel-title';
+  title.textContent = 'League Settings';
+  wrapper.appendChild(title);
+
+  const logoRow = document.createElement('div');
+  logoRow.className = 'admin-logo-wrapper';
+
+  const logoPreview = document.createElement('img');
+  logoPreview.className = 'admin-logo-preview';
+  if (logoUrl) {
+    logoPreview.src = logoUrl;
+  } else {
+    logoPreview.alt = 'No logo uploaded';
+  }
+  logoRow.appendChild(logoPreview);
+
+  const logoControls = document.createElement('div');
+  const logoLabel = document.createElement('div');
+  logoLabel.style.fontSize = '11px';
+  logoLabel.style.color = 'var(--text-secondary)';
+  logoLabel.textContent = 'League Logo (used in Presentation intro)';
+  const logoInput = document.createElement('input');
+  logoInput.type = 'file';
+  logoInput.accept = 'image/*';
+  logoInput.style.fontSize = '11px';
+  logoInput.addEventListener('change', () => {
+    const file = logoInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      saveLeagueLogo(activeLeagueId, dataUrl);
+      logoPreview.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
   });
 
-  saveBtn.onclick = () => {
-    const newConf = {};
-    const colorInputs = container.querySelectorAll('.admin-color');
-    const logoInputs = container.querySelectorAll('.admin-logo');
+  logoControls.appendChild(logoLabel);
+  logoControls.appendChild(logoInput);
+  logoRow.appendChild(logoControls);
+  wrapper.appendChild(logoRow);
 
-    colorInputs.forEach(inp => {
-      const leagueId = inp.getAttribute('data-league');
-      if (!newConf[leagueId]) newConf[leagueId] = {};
-      newConf[leagueId].primaryColor = inp.value || '#222631';
-    });
-    logoInputs.forEach(inp => {
-      const leagueId = inp.getAttribute('data-league');
-      if (!newConf[leagueId]) newConf[leagueId] = {};
-      newConf[leagueId].logoUrl = inp.value || '';
-    });
+  const title2 = document.createElement('div');
+  title2.className = 'admin-panel-title';
+  title2.textContent = 'Team Colors (used in Power Rankings & Presentation)';
+  wrapper.appendChild(title2);
 
-    saveJson('league_config', newConf);
-    if (state.currentLeagueId) {
-      renderPowerRankingsTable(state.currentLeagueId);
+  const table = document.createElement('table');
+  table.className = 'admin-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Team</th><th>Color</th><th>Preview</th></tr>';
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  teams.forEach(team => {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = team.displayName;
+    tr.appendChild(tdName);
+
+    const tdInput = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'admin-color-input';
+    input.placeholder = '#123456';
+    input.value = colors[team.displayName] || '';
+    tdInput.appendChild(input);
+    tr.appendChild(tdInput);
+
+    const tdPreview = document.createElement('td');
+    const preview = document.createElement('div');
+    preview.className = 'admin-color-preview';
+    if (colors[team.displayName]) {
+      preview.style.background = colors[team.displayName];
+    } else {
+      preview.style.background = 'transparent';
     }
+    tdPreview.appendChild(preview);
+    tr.appendChild(tdPreview);
+
+    input.addEventListener('change', () => {
+      let value = input.value.trim();
+      if (value && !value.startsWith('#')) {
+        value = '#' + value;
+      }
+      if (!/^#[0-9a-fA-F]{3,6}$/.test(value)) {
+        input.style.borderColor = '#E74C3C';
+        return;
+      }
+      input.style.borderColor = '#30354a';
+      colors[team.displayName] = value;
+      preview.style.background = value;
+      saveTeamColors(activeLeagueId, colors);
+      renderPowerTab();
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+
+  powerAdminPanel.innerHTML = '';
+  powerAdminPanel.appendChild(wrapper);
+}
+
+// PRESENTATION MODE
+
+function enterPowerPresentationMode() {
+  if (!lastPowerRows.length) return;
+
+  powerPresentationActive = true;
+  powerPresentationStep = -1;
+
+  if (powerTableContainer) powerTableContainer.classList.add('hidden');
+  if (powerAdminPanel) powerAdminPanel.classList.add('hidden');
+  if (powerPresentationContainer) powerPresentationContainer.classList.remove('hidden');
+
+  powerPresentationContainer.innerHTML = `
+    <div class="presentation-inner">
+      <div id="powerSlides" class="presentation-slides"></div>
+      <button id="powerNextBtn" class="btn btn-primary presentation-next-btn">Next</button>
+    </div>
+  `;
+
+  const nextBtn = document.getElementById('powerNextBtn');
+  const slides = document.getElementById('powerSlides');
+
+  nextBtn.addEventListener('click', () => {
+    handlePowerNext(slides, nextBtn);
+  });
+}
+
+function exitPowerPresentationMode() {
+  powerPresentationActive = false;
+  powerPresentationStep = -1;
+  if (powerPresentationContainer) {
+    powerPresentationContainer.classList.add('hidden');
+    powerPresentationContainer.innerHTML = '';
+  }
+  if (powerTableContainer) powerTableContainer.classList.remove('hidden');
+}
+
+function handlePowerNext(slidesContainer, nextBtn) {
+  if (!slidesContainer) return;
+
+  const totalTeams = powerRevealOrder.length;
+
+  if (powerPresentationStep === -1) {
+    const intro = document.createElement('div');
+    intro.className = 'presentation-slide presentation-intro';
+
+    const logoUrl = loadLeagueLogo(activeLeagueId);
+    if (logoUrl) {
+      const img = document.createElement('img');
+      img.src = logoUrl;
+      img.alt = 'League logo';
+      img.className = 'presentation-logo';
+      intro.appendChild(img);
+    }
+
+    const title = document.createElement('div');
+    title.className = 'presentation-title';
+    title.textContent = 'Week ' + (sleeperState?.week ?? '') + ' Power Rankings';
+    intro.appendChild(title);
+
+    slidesContainer.appendChild(intro);
+
+    powerPresentationStep = 0;
+    return;
+  }
+
+  if (powerPresentationStep < totalTeams) {
+    const row = powerRevealOrder[powerPresentationStep];
+
+    const slide = document.createElement('div');
+    slide.className = 'presentation-slide';
+
+    const header = document.createElement('div');
+    header.className = 'presentation-team-header';
+
+    const rankEl = document.createElement('div');
+    rankEl.className = 'presentation-team-rank';
+    rankEl.textContent = row.rank;
+    header.appendChild(rankEl);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'presentation-team-name';
+    nameEl.textContent = row.teamName;
+    header.appendChild(nameEl);
+
+    slide.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'presentation-team-meta';
+    const changeText = (!Number.isFinite(row.change) || row.change === 0)
+      ? 'No change'
+      : row.change > 0
+        ? `Up ${row.change}`
+        : `Down ${Math.abs(row.change)}`;
+    meta.textContent = `Standing: ${row.standingRank} • All-Play: ${row.allPlayRank} • ${changeText}`;
+    slide.appendChild(meta);
+
+    const notesObj = loadPowerNotes(activeLeagueId);
+    const notesKey = String(row.roster_id);
+    const noteText = notesObj[notesKey] || '';
+
+    if (noteText) {
+      const notesLabel = document.createElement('div');
+      notesLabel.className = 'presentation-notes-label';
+      notesLabel.textContent = 'Notes';
+      slide.appendChild(notesLabel);
+
+      const notesBody = document.createElement('div');
+      notesBody.className = 'presentation-notes-text';
+      notesBody.textContent = noteText;
+      slide.appendChild(notesBody);
+    }
+
+    const colorMeta = getTeamColorMeta(row.teamName, activeLeagueId);
+    slide.style.background = `linear-gradient(135deg, ${colorMeta.headerDark}, ${colorMeta.headerLight})`;
+
+    slidesContainer.insertBefore(slide, slidesContainer.children[1] || null);
+
+    powerPresentationStep += 1;
+
+    if (powerPresentationStep === totalTeams) {
+      nextBtn.textContent = 'Exit Presentation Mode';
+    }
+
+    return;
+  }
+
+  exitPowerPresentationMode();
+}
+
+// TEAM COLOR META
+
+function getTeamColorMeta(teamName, leagueId) {
+  const defaultHue = hashStringToHue(teamName || '');
+  let baseColor = `hsl(${defaultHue}, 70%, 40%)`;
+
+  if (leagueId) {
+    const colors = loadTeamColors(leagueId);
+    if (colors && colors[teamName]) {
+      baseColor = colors[teamName];
+    }
+  }
+
+  let headerDark = baseColor;
+  let headerLight = baseColor;
+
+  if (baseColor.startsWith('#')) {
+    const { r, g, b } = hexToRgb(baseColor);
+    headerDark = `rgba(${r}, ${g}, ${b}, 0.85)`;
+    headerLight = `rgba(${r}, ${g}, ${b}, 1)`;
+  } else {
+    headerDark = baseColor;
+    headerLight = baseColor;
+  }
+
+  const gradient = `linear-gradient(90deg, ${headerDark} 0%, ${headerLight} 55%, transparent 100%)`;
+  return { headerDark, headerLight, gradient };
+}
+
+function hashStringToHue(str) {
+  let hash = 0;
+  const s = str || 'team';
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) | 0;
+  }
+  const hue = (hash % 360 + 360) % 360;
+  return hue;
+}
+
+function hexToRgb(hex) {
+  let h = hex.replace('#', '');
+  if (h.length === 3) {
+    h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  const num = parseInt(h, 16);
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255
   };
 }
 
-// --- Init ---
+// POWER RANKINGS CALC
 
-document.addEventListener('DOMContentLoaded', () => {
-  loadNflState();
-  setupCsvUpload();
-  setupTabs();
-  setupLeagueDropdown();
-  setupWeekControls();
-  setupAdminConfig();
-  setupPresentationToggle();
-});
+async function computePowerRankingsForLeague(leagueId) {
+  const league = leaguesMap.get(leagueId);
+  if (!league) return [];
+
+  const { rosters, users } = league;
+  if (!rosters || !rosters.length) return [];
+
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
+
+  const teamInfos = rosters.map(r => {
+    const ownerUser = usersByIdMap.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    return {
+      roster_id: r.roster_id,
+      owner_id: r.owner_id,
+      displayName
+    };
+  });
+
+  const rosScores = new Map();
+  rosters.forEach(r => {
+    rosScores.set(r.roster_id, calcTeamRosScore(r));
+  });
+
+  const rosRankByRoster = new Map();
+  const sortedRos = [...rosScores.entries()].sort((a, b) => a[1] - b[1]);
+  let rosRankCounter = 1;
+  sortedRos.forEach(([rid]) => {
+    rosRankByRoster.set(rid, rosRankCounter++);
+  });
+
+  const standingRanks = computeStandingRanks(league);
+  const allPlayRanks = await computeAllPlayRanks(leagueId, league);
+
+  const numTeams = rosters.length;
+  const results = [];
+
+  teamInfos.forEach(info => {
+    const rid = info.roster_id;
+    const rosRank = rosRankByRoster.get(rid) ?? numTeams;
+    const standingRank = standingRanks.get(rid) ?? numTeams;
+    const allPlayRank = allPlayRanks.get(rid) ?? Math.ceil(numTeams / 2);
+
+    const powerScore = 0.4 * rosRank + 0.3 * standingRank + 0.3 * allPlayRank;
+
+    results.push({
+      roster_id: rid,
+      teamName: info.displayName,
+      rosRank,
+      standingRank,
+      allPlayRank,
+      powerScore
+    });
+  });
+
+  return results;
+}
+
+function calcTeamRosScore(roster) {
+  const allIds = new Set([
+    ...(roster.players || []),
+    ...(roster.taxi || []),
+    ...(roster.reserve || [])
+  ]);
+
+  const ranks = [];
+  allIds.forEach(pid => {
+    const p = playersById[pid];
+    if (!p) return;
+    const name = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
+    if (!name) return;
+    const row = rosByName.get(name.toLowerCase());
+    if (row && Number.isFinite(row.rank)) {
+      ranks.push(row.rank);
+    }
+  });
+
+  if (!ranks.length) return Infinity;
+
+  ranks.sort((a, b) => a - b);
+  const limit = Math.min(8, ranks.length);
+  const slice = ranks.slice(0, limit);
+  const avg = slice.reduce((sum, x) => sum + x, 0) / limit;
+  return avg;
+}
+
+function computeStandingRanks(league) {
+  const { rosters } = league;
+  const arr = rosters.map(r => {
+    const s = r.settings || {};
+    const wins = Number(s.wins ?? 0);
+    const losses = Number(s.losses ?? 0);
+    const ties = Number(s.ties ?? 0);
+    const fpts = Number(s.fpts ?? 0);
+    const fptsDec = Number(s.fpts_decimal ?? 0);
+    const points = fpts + fptsDec / 100;
+    return {
+      roster_id: r.roster_id,
+      wins,
+      losses,
+      ties,
+      points
+    };
+  });
+
+  arr.sort((a, b) => {
+    if (a.wins !== b.wins) return b.wins - a.wins;
+    if (a.points !== b.points) return b.points - a.points;
+    return a.roster_id - b.roster_id;
+  });
+
+  const map = new Map();
+  arr.forEach((entry, idx) => {
+    map.set(entry.roster_id, idx + 1);
+  });
+  return map;
+}
+
+async function computeAllPlayRanks(leagueId, league) {
+  const { rosters } = league;
+  const rosterIds = rosters.map(r => r.roster_id);
+
+  const ranksPerRoster = new Map();
+  rosterIds.forEach(id => ranksPerRoster.set(id, []));
+
+  const currentWeek = Number(sleeperState?.week ?? 0);
+  if (!currentWeek) return new Map();
+
+  const weeks = [];
+  for (let w = currentWeek; w >= 1 && weeks.length < 3; w--) {
+    weeks.push(w);
+  }
+
+  for (const w of weeks) {
+    try {
+      const res = await fetch(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${w}`);
+      const matchups = await res.json();
+      if (!Array.isArray(matchups) || !matchups.length) continue;
+
+      const pointsByRoster = new Map();
+      matchups.forEach(m => {
+        if (m.roster_id != null) {
+          pointsByRoster.set(m.roster_id, Number(m.points ?? 0));
+        }
+      });
+
+      const weekArr = rosterIds.map(rid => ({
+        roster_id: rid,
+        points: pointsByRoster.has(rid) ? pointsByRoster.get(rid) : 0
+      }));
+
+      weekArr.sort((a, b) => b.points - a.points);
+      weekArr.forEach((entry, idx) => {
+        const list = ranksPerRoster.get(entry.roster_id);
+        if (list) list.push(idx + 1);
+      });
+    } catch (e) {
+      console.warn('Error fetching matchups for week', w, e);
+    }
+  }
+
+  const avgPosByRoster = new Map();
+  rosterIds.forEach(rid => {
+    const list = ranksPerRoster.get(rid) || [];
+    if (!list.length) {
+      avgPosByRoster.set(rid, rosterIds.length / 2);
+    } else {
+      const avg = list.reduce((s, v) => s + v, 0) / list.length;
+      avgPosByRoster.set(rid, avg);
+    }
+  });
+
+  const sorted = [...avgPosByRoster.entries()].sort((a, b) => a[1] - b[1]);
+  const rankByRoster = new Map();
+  sorted.forEach(([rid], idx) => {
+    rankByRoster.set(rid, idx + 1);
+  });
+
+  return rankByRoster;
+}
+
+// OWNERSHIP CONTEXT
+
+function buildOwnershipContext(league) {
+  const { rosters, users } = league;
+
+  const usersByIdMap = new Map();
+  users.forEach(u => usersByIdMap.set(u.user_id, u));
+
+  const teams = rosters.map(r => {
+    const ownerUser = usersByIdMap.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    const isMine = ownerUser?.user_id === myUserId;
+    return {
+      roster_id: r.roster_id,
+      owner_id: r.owner_id,
+      displayName,
+      isMine
+    };
+  });
+
+  teams.sort((a, b) => {
+    if (a.isMine && !b.isMine) return -1;
+    if (!a.isMine && b.isMine) return 1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  const teamNames = teams.map(t => t.displayName + (t.isMine ? ' (You)' : ''));
+  const rosterIdToIndex = new Map();
+  teams.forEach((t, idx) => rosterIdToIndex.set(t.roster_id, idx));
+
+  const myRosterIds = new Set(teams.filter(t => t.isMine).map(t => t.roster_id));
+
+  const playerToRoster = new Map();
+  rosters.forEach(r => {
+    const allPlayers = new Set([
+      ...(r.players || []),
+      ...(r.taxi || []),
+      ...(r.reserve || [])
+    ]);
+    allPlayers.forEach(pid => {
+      if (!playerToRoster.has(pid)) {
+        playerToRoster.set(pid, r.roster_id);
+      }
+    });
+  });
+
+  return { teamNames, rosterIdToIndex, playerToRoster, myRosterIds };
+}
+
+function getOwnershipStatus(playerName, position, team, ownershipContext) {
+  if (!ownershipContext) return 'unknown';
+  const pid = lookupPlayerId(playerName, { position, team });
+  if (!pid) return 'unknown';
+  const rosterId = ownershipContext.playerToRoster.get(pid);
+  if (!rosterId) return 'FA';
+  if (ownershipContext.myRosterIds.has(rosterId)) return 'MINE';
+  return 'OTHER';
+}
+
+// UTILITIES & COLOR HELPERS
+
+function summarizeSeries(values) {
+  if (!values.length) {
+    return { min: null, median: null, max: null };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const midIdx = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1
+    ? sorted[midIdx]
+    : (sorted[midIdx - 1] + sorted[midIdx]) / 2;
+  return { min, median, max };
+}
+
+function setCellColor(td, color) {
+  if (!color) return;
+  td.classList.add('col-badge');
+  td.style.background = `linear-gradient(135deg, ${color}, rgba(0,0,0,0.35))`;
+  td.style.color = '#ffffff';
+}
+
+// Overall rank gradient: best (1) green -> mid yellow -> worst red
+function applyOverallRankColor(td, rank) {
+  if (!Number.isFinite(rank) || rank === 0) return;
+
+  let color;
+  if (rank <= 1) {
+    color = 'hsl(120, 70%, 40%)';
+  } else if (rank >= 125) {
+    color = 'hsl(0, 70%, 50%)';
+  } else if (rank <= 55) {
+    const t = (rank - 1) / (55 - 1);
+    const hue = 120 - (120 - 60) * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  } else {
+    const t = (rank - 55) / (125 - 55);
+    const hue = 60 - 60 * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  }
+  setCellColor(td, color);
+}
+
+// Position rank thresholds
+function applyPosRankColor(td, position, rank) {
+  if (!Number.isFinite(rank) || rank === 0) return;
+
+  let mid, max;
+  const pos = position.toUpperCase();
+  if (pos === 'QB' || pos === 'TE') {
+    mid = 11;
+    max = 21;
+  } else if (pos === 'RB' || pos === 'WR') {
+    mid = 21;
+    max = 51;
+  } else {
+    mid = 21;
+    max = 51;
+  }
+
+  let color;
+  if (rank <= 1) {
+    color = 'hsl(120, 70%, 40%)';
+  } else if (rank >= max) {
+    color = 'hsl(0, 70%, 50%)';
+  } else if (rank <= mid) {
+    const t = (rank - 1) / (mid - 1);
+    const hue = 120 - (120 - 60) * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  } else {
+    const t = (rank - mid) / (max - mid);
+    const hue = 60 - 60 * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  }
+  setCellColor(td, color);
+}
+
+// Projections / PPG: higher = green, lowest = red, median golden
+function applyProjectionColor(td, value, summary) {
+  if (!Number.isFinite(value) || !summary) return;
+  const { min, median, max } = summary;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return;
+
+  let color;
+  if (value === max) {
+    color = 'hsl(120, 70%, 40%)';
+  } else if (value === min) {
+    color = 'hsl(0, 70%, 50%)';
+  } else if (value === median) {
+    color = 'hsl(50, 100%, 60%)';
+  } else if (value > median) {
+    const t = (value - median) / (max - median || 1);
+    const hue = 80 + (120 - 80) * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
+  } else {
+    const t = (median - value) / (median - min || 1);
+    const hue = 50 - 50 * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
+  }
+  setCellColor(td, color);
+}
+
+// Matchup / schedule: lower = green, higher = red, median golden
+function applyMatchupColor(td, value, summary) {
+  if (!Number.isFinite(value) || !summary) return;
+  const { min, median, max } = summary;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return;
+
+  let color;
+  if (value === min) {
+    color = 'hsl(120, 70%, 40%)';
+  } else if (value === max) {
+    color = 'hsl(0, 70%, 50%)';
+  } else if (value === median) {
+    color = 'hsl(50, 100%, 60%)';
+  } else if (value < median) {
+    const t = (median - value) / (median - min || 1);
+    const hue = 80 + (120 - 80) * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
+  } else {
+    const t = (value - median) / (max - median || 1);
+    const hue = 50 - 50 * t;
+    const lightness = 75 - 25 * t;
+    color = `hsl(${hue}, 70%, ${lightness}%)`;
+  }
+  setCellColor(td, color);
+}
+
+function applyScheduleColor(td, value, summary) {
+  if (!Number.isFinite(value)) return;
+  if (!summary) {
+    const tmpSummary = summarizeSeries([1, 16, 32]);
+    applyMatchupColor(td, value, tmpSummary);
+  } else {
+    applyMatchupColor(td, value, summary);
+  }
+}
+
+function setMoveCell(td, move) {
+  if (!Number.isFinite(move) || move === 0) {
+    td.textContent = '';
+    return;
+  }
+  const dirUp = move > 0;
+  const magnitude = Math.abs(move);
+  const arrow = dirUp ? '↑' : '↓';
+  td.textContent = `${arrow} ${magnitude}`;
+
+  const capped = Math.min(magnitude, 3);
+  const lightness = 80 - (capped - 1) * 10;
+  const color = dirUp
+    ? `hsl(120, 70%, ${lightness}%)`
+    : `hsl(0, 70%, ${lightness}%)`;
+  setCellColor(td, color);
+}
+
+// Bye: this week = red X, past = green check, future = number only
+function applyByeColor(td, byeWeek) {
+  if (!sleeperState || !Number.isFinite(byeWeek)) return;
+  const currentWeek = Number(sleeperState.week);
+  if (!Number.isFinite(currentWeek)) return;
+
+  if (byeWeek === currentWeek) {
+    td.innerHTML = `<span style="color:#E74C3C;">❌</span> ${byeWeek}`;
+  } else if (byeWeek < currentWeek) {
+    td.innerHTML = `<span style="color:#00D26A;">✔</span> ${byeWeek}`;
+  } else {
+    td.textContent = String(byeWeek);
+  }
+}
