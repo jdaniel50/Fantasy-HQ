@@ -57,6 +57,7 @@
       <button class="tab-button active" data-tab="teamsTab">Teams</button>
       <button class="tab-button" data-tab="weekTab">This Week</button>
       <button class="tab-button" data-tab="rosTab">Rest of Season</button>
+      <button class="tab-button" data-tab="powerTab">Power Rankings</button>
     </nav>
 
     <main class="tab-container">
@@ -142,6 +143,23 @@
           <div class="card-body" id="rosContent">
             <div class="muted-text">
               Upload your ROS CSV to see the board. Select a league to get ownership highlights.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- POWER RANKINGS TAB -->
+      <section id="powerTab" class="tab-content">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Power Rankings</div>
+            <div class="card-subtitle">
+              Combined view of ROS strength, league standings, and all-play performance over the last 3 weeks.
+            </div>
+          </div>
+          <div class="card-body" id="powerContent">
+            <div class="muted-text">
+              Select a league and upload ROS rankings to generate power rankings.
             </div>
           </div>
         </div>
