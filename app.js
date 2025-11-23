@@ -40,6 +40,10 @@ const powerPresentationBtn = document.getElementById('powerPresentationBtn');
 const powerAdminPanel = document.getElementById('powerAdminPanel');
 const powerAdminToggle = document.getElementById('powerAdminToggle');
 
+// New containers for added tabs
+const standingsContent = document.getElementById('standingsContent');
+const matchupsContent = document.getElementById('matchupsContent');
+
 let controlsInitialized = false;
 
 // Power rankings state
@@ -111,6 +115,8 @@ function initTabs() {
       else if (targetId === 'weekTab') renderWeekTab();
       else if (targetId === 'rosTab') renderRosTab();
       else if (targetId === 'powerTab') renderPowerTab();
+      else if (targetId === 'standingsTab') renderStandingsTab();
+      else if (targetId === 'matchupsTab') renderMatchupsTab();
     });
   });
 
@@ -133,6 +139,8 @@ function initControls() {
     renderWeekTab();
     renderRosTab();
     renderPowerTab();
+    renderStandingsTab();
+    renderMatchupsTab();
   });
 
   teamSelect.addEventListener('change', () => {
@@ -235,6 +243,7 @@ function handleCsvInput(inputEl, type) {
       renderTeamsTab();
       renderRosTab();
       renderPowerTab();
+      renderStandingsTab();
     } else if (type === 'week') {
       const parsed = Papa.parse(text, {
         header: false,
@@ -483,7 +492,9 @@ async function initSleeper() {
   renderTeamsTab();
   renderWeekTab();
   renderRosTab();
-  renderPowerTab();
+  await renderPowerTab();
+  renderStandingsTab();
+  renderMatchupsTab();
 }
 
 async function refreshSleeperData() {
@@ -493,7 +504,9 @@ async function refreshSleeperData() {
   renderTeamsTab();
   renderWeekTab();
   renderRosTab();
-  renderPowerTab();
+  await renderPowerTab();
+  renderStandingsTab();
+  renderMatchupsTab();
 }
 
 async function fetchSleeperCoreData() {
@@ -1327,8 +1340,6 @@ async function renderPowerTab() {
         <th>All-Play</th>
         <th>ROS</th>
         <th>Schedule</th>
-        <th>Stars</th>
-        <th>Summary</th>
       </tr>
     `;
     table.appendChild(thead);
@@ -1380,15 +1391,6 @@ async function renderPowerTab() {
       tdSchedule.textContent = row.scheduleRank ?? '';
       tr.appendChild(tdSchedule);
 
-      const tdStars = document.createElement('td');
-      tdStars.textContent =
-        `SO ${starsToGlyph(row.scoringStars)} | Sch ${starsToGlyph(row.scheduleStars)} | St ${starsToGlyph(row.standingStars)} | Form ${starsToGlyph(row.allPlayStars)}`;
-      tr.appendChild(tdStars);
-
-      const tdSummary = document.createElement('td');
-      tdSummary.textContent = row.summary || '';
-      tr.appendChild(tdSummary);
-
       tbody.appendChild(tr);
     });
 
@@ -1397,12 +1399,287 @@ async function renderPowerTab() {
     powerTableContainer.innerHTML = '';
     powerTableContainer.appendChild(table);
 
-    if (!powerAdminPanel.classList.contains('hidden')) {
+    if (powerAdminPanel && !powerAdminPanel.classList.contains('hidden')) {
       renderPowerAdminPanel();
     }
   } catch (e) {
     console.error(e);
     powerTableContainer.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
+  }
+}
+
+// STANDINGS TAB
+
+function renderStandingsTab() {
+  if (!standingsContent) return;
+
+  if (!activeLeagueId) {
+    standingsContent.innerHTML = '<div class="muted-text">Select a league to view standings.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    standingsContent.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  const { rosters, users } = league;
+  if (!rosters || !rosters.length) {
+    standingsContent.innerHTML = '<div class="muted-text">No teams found in this league.</div>';
+    return;
+  }
+
+  const usersById = new Map();
+  users.forEach(u => usersById.set(u.user_id, u));
+
+  const standingsMap = computeStandingRanks(league);
+  const pointsMap = computePointsForRanks(league);
+
+  const rows = rosters.map(r => {
+    const ownerUser = usersById.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    const isMine = ownerUser?.user_id === myUserId;
+    const s = r.settings || {};
+    const wins = Number(s.wins ?? 0);
+    const losses = Number(s.losses ?? 0);
+    const ties = Number(s.ties ?? 0);
+    const fpts = Number(s.fpts ?? 0);
+    const fptsDec = Number(s.fpts_decimal ?? 0);
+    const pf = fpts + fptsDec / 100;
+    const fptsAgainst = Number(s.fpts_against ?? 0);
+    const fptsAgainstDec = Number(s.fpts_against_decimal ?? 0);
+    const pa = fptsAgainst + fptsAgainstDec / 100;
+    const rank = standingsMap.get(r.roster_id) ?? 999;
+    const pointsRank = pointsMap.get(r.roster_id) ?? 999;
+
+    return {
+      roster_id: r.roster_id,
+      displayName,
+      isMine,
+      wins,
+      losses,
+      ties,
+      pf,
+      pa,
+      rank,
+      pointsRank
+    };
+  });
+
+  rows.sort((a, b) => a.rank - b.rank);
+
+  const table = document.createElement('table');
+  table.className = 'table standings-table';
+
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
+      <th>Rank</th>
+      <th>Team</th>
+      <th>Record</th>
+      <th>PF</th>
+      <th>PA</th>
+      <th>PF Rank</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    if (row.isMine) {
+      tr.classList.add('row-mine');
+    }
+
+    const tdRank = document.createElement('td');
+    tdRank.textContent = row.rank;
+    tr.appendChild(tdRank);
+
+    const tdTeam = document.createElement('td');
+    tdTeam.textContent = row.displayName;
+    tr.appendChild(tdTeam);
+
+    const tdRecord = document.createElement('td');
+    const record = `${row.wins}-${row.losses}${row.ties ? '-' + row.ties : ''}`;
+    tdRecord.textContent = record;
+    tr.appendChild(tdRecord);
+
+    const tdPf = document.createElement('td');
+    tdPf.textContent = row.pf.toFixed(2);
+    tr.appendChild(tdPf);
+
+    const tdPa = document.createElement('td');
+    tdPa.textContent = row.pa.toFixed(2);
+    tr.appendChild(tdPa);
+
+    const tdPfRank = document.createElement('td');
+    tdPfRank.textContent = row.pointsRank;
+    tr.appendChild(tdPfRank);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  standingsContent.innerHTML = '';
+  standingsContent.appendChild(table);
+}
+
+// MATCHUPS TAB
+
+async function renderMatchupsTab() {
+  if (!matchupsContent) return;
+
+  if (!activeLeagueId) {
+    matchupsContent.innerHTML = '<div class="muted-text">Select a league to view matchups.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    matchupsContent.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  const currentWeek = Number(sleeperState?.week ?? 0);
+  if (!currentWeek) {
+    matchupsContent.innerHTML = '<div class="muted-text">Current NFL week is not available yet.</div>';
+    return;
+  }
+
+  matchupsContent.innerHTML = '<div class="muted-text">Loading matchups...</div>';
+
+  const { rosters, users } = league;
+  const usersById = new Map();
+  users.forEach(u => usersById.set(u.user_id, u));
+
+  const rosterMetaById = new Map();
+  rosters.forEach(r => {
+    const ownerUser = usersById.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    const isMine = ownerUser?.user_id === myUserId;
+    const s = r.settings || {};
+    const wins = Number(s.wins ?? 0);
+    const losses = Number(s.losses ?? 0);
+    const ties = Number(s.ties ?? 0);
+    const fpts = Number(s.fpts ?? 0);
+    const fptsDec = Number(s.fpts_decimal ?? 0);
+    const pf = fpts + fptsDec / 100;
+
+    rosterMetaById.set(r.roster_id, {
+      roster_id: r.roster_id,
+      displayName,
+      isMine,
+      wins,
+      losses,
+      ties,
+      pf
+    });
+  });
+
+  try {
+    const res = await fetch(`https://api.sleeper.app/v1/league/${activeLeagueId}/matchups/${currentWeek}`);
+    const matchups = await res.json();
+
+    if (!Array.isArray(matchups) || !matchups.length) {
+      matchupsContent.innerHTML = '<div class="muted-text">No matchup data found for this week.</div>';
+      return;
+    }
+
+    const pods = new Map();
+    matchups.forEach(m => {
+      const mid = m.matchup_id;
+      if (mid == null) return;
+      if (!pods.has(mid)) pods.set(mid, []);
+      pods.get(mid).push(m);
+    });
+
+    const rows = [];
+    pods.forEach(group => {
+      const teams = group
+        .filter(m => m.roster_id != null)
+        .map(m => rosterMetaById.get(m.roster_id))
+        .filter(Boolean);
+
+      if (!teams.length) return;
+
+      const isMyMatch = teams.some(t => t.isMine);
+      rows.push({ teams, isMyMatch });
+    });
+
+    if (!rows.length) {
+      matchupsContent.innerHTML = '<div class="muted-text">No head-to-head matchups scheduled for this week.</div>';
+      return;
+    }
+
+    // Sort with your matchup first, then alphabetically
+    rows.sort((a, b) => {
+      if (a.isMyMatch && !b.isMyMatch) return -1;
+      if (!a.isMyMatch && b.isMyMatch) return 1;
+      const nameA = a.teams[0]?.displayName || '';
+      const nameB = b.teams[0]?.displayName || '';
+      return nameA.localeCompare(nameB);
+    });
+
+    const table = document.createElement('table');
+    table.className = 'table matchups-table';
+
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr>
+        <th>Matchup (Week ${currentWeek})</th>
+        <th>Records</th>
+        <th>Points For</th>
+      </tr>
+    `;
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      if (row.isMyMatch) {
+        tr.classList.add('row-mine');
+      }
+
+      const names = row.teams.map(t => t.displayName).join(' vs ');
+      const records = row.teams
+        .map(t => `${t.displayName}: ${t.wins}-${t.losses}${t.ties ? '-' + t.ties : ''}`)
+        .join(' | ');
+      const pointsFor = row.teams
+        .map(t => `${t.displayName}: ${t.pf.toFixed(2)}`)
+        .join(' | ');
+
+      const tdMatch = document.createElement('td');
+      tdMatch.textContent = names;
+      tr.appendChild(tdMatch);
+
+      const tdRecord = document.createElement('td');
+      tdRecord.textContent = records;
+      tr.appendChild(tdRecord);
+
+      const tdPf = document.createElement('td');
+      tdPf.textContent = pointsFor;
+      tr.appendChild(tdPf);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    matchupsContent.innerHTML = '';
+    matchupsContent.appendChild(table);
+  } catch (e) {
+    console.error('Error loading matchups', e);
+    matchupsContent.innerHTML = '<div class="muted-text">Error loading matchups for this week.</div>';
   }
 }
 
