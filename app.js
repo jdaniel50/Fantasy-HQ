@@ -25,6 +25,7 @@ const upgradeCard = document.getElementById('upgradeCard');
 const upgradeContent = document.getElementById('upgradeContent');
 const weekContent = document.getElementById('weekContent');
 const rosContent = document.getElementById('rosContent');
+const powerContent = document.getElementById('powerContent');
 const currentSeasonLabel = document.getElementById('currentSeasonLabel');
 const currentWeekLabel = document.getElementById('currentWeekLabel');
 const weekPositionSelect = document.getElementById('weekPositionSelect');
@@ -92,8 +93,9 @@ function initTabs() {
       });
 
       if (targetId === 'teamsTab') renderTeamsTab();
-      if (targetId === 'weekTab') renderWeekTab();
-      if (targetId === 'rosTab') renderRosTab();
+      else if (targetId === 'weekTab') renderWeekTab();
+      else if (targetId === 'rosTab') renderRosTab();
+      else if (targetId === 'powerTab') renderPowerTab();
     });
   });
 
@@ -115,6 +117,7 @@ function initControls() {
     renderTeamsTab();
     renderWeekTab();
     renderRosTab();
+    renderPowerTab();
   });
 
   teamSelect.addEventListener('change', () => {
@@ -161,7 +164,6 @@ function handleCsvInput(inputEl, type) {
         return;
       }
 
-      // Use previous rosData (from localStorage) to compute moves
       const prevMap = new Map();
       rosData.forEach(r => {
         if (!r || !r.player) return;
@@ -176,7 +178,6 @@ function handleCsvInput(inputEl, type) {
         const key = row.player.toLowerCase();
         const prevRank = prevMap.get(key);
         if (Number.isFinite(prevRank) && Number.isFinite(row.rank)) {
-          // Positive = moved up (better rank: lower number)
           row.move = prevRank - row.rank;
         } else {
           row.move = null;
@@ -197,6 +198,7 @@ function handleCsvInput(inputEl, type) {
 
       renderTeamsTab();
       renderRosTab();
+      renderPowerTab();
     } else if (type === 'week') {
       const parsed = Papa.parse(text, {
         header: false,
@@ -255,7 +257,7 @@ function normalizeRosRow(raw) {
     position: getStr('position', 'pos').toUpperCase(),
     pos_rank: getNum('positional rank', 'pos_rank', 'position_rank'),
     tier: getNum('tier'),
-    move: null, // will be computed from previous ROS
+    move: null,
     team: getStr('team'),
     ros: getNum('ros', 'ros schedule', 'ros_schedule'),
     next4: getNum('next 4', 'next4', 'next_4'),
@@ -452,6 +454,7 @@ async function initSleeper() {
   renderTeamsTab();
   renderWeekTab();
   renderRosTab();
+  renderPowerTab();
 }
 
 async function refreshSleeperData() {
@@ -461,6 +464,7 @@ async function refreshSleeperData() {
   renderTeamsTab();
   renderWeekTab();
   renderRosTab();
+  renderPowerTab();
 }
 
 async function fetchSleeperCoreData() {
@@ -537,7 +541,6 @@ function lookupPlayerId(name, meta = {}) {
   const targetPos = meta.position ? meta.position.toUpperCase() : null;
   const targetTeam = meta.team ? meta.team.toUpperCase() : null;
 
-  // 1) Exact-name candidate with meta check
   let pid = playersByNameLower.get(exactKey);
   if (pid) {
     const p = playersById[pid];
@@ -550,7 +553,6 @@ function lookupPlayerId(name, meta = {}) {
     }
   }
 
-  // 2) Fuzzy match using normalized name
   const simple = normalizeNameKey(name);
   if (!simple) return null;
 
@@ -573,7 +575,7 @@ function lookupPlayerId(name, meta = {}) {
 
       if (sleeperLast !== lastName) continue;
 
-      let score = 1; // last name
+      let score = 1;
 
       if (inputFirst && sleeperFirst && inputFirst === sleeperFirst) {
         score += 2;
@@ -1047,7 +1049,6 @@ function renderWeekTab() {
 
     const tdRank = document.createElement('td');
     tdRank.textContent = r.rank ?? '';
-    // no color for rank
     tr.appendChild(tdRank);
 
     const tdPlayer = document.createElement('td');
@@ -1155,7 +1156,6 @@ function renderRosTab() {
 
     const tdRank = document.createElement('td');
     tdRank.textContent = row.rank ?? '';
-    // no color for rank in ROS
     tr.appendChild(tdRank);
 
     const tdPlayer = document.createElement('td');
@@ -1168,7 +1168,6 @@ function renderRosTab() {
 
     const tdPosRank = document.createElement('td');
     tdPosRank.textContent = row.pos_rank ?? '';
-    // no color for pos rank in ROS
     tr.appendChild(tdPosRank);
 
     const tdTier = document.createElement('td');
@@ -1207,6 +1206,330 @@ function renderRosTab() {
 
   rosContent.innerHTML = '';
   rosContent.appendChild(wrapper);
+}
+
+// POWER RANKINGS TAB
+
+async function renderPowerTab() {
+  if (!powerContent) return;
+
+  if (!activeLeagueId) {
+    powerContent.innerHTML = '<div class="muted-text">Select a league to view power rankings.</div>';
+    return;
+  }
+
+  if (!rosData.length) {
+    powerContent.innerHTML = '<div class="muted-text">Upload your ROS CSV to generate power rankings.</div>';
+    return;
+  }
+
+  const league = leaguesMap.get(activeLeagueId);
+  if (!league) {
+    powerContent.innerHTML = '<div class="muted-text">Unable to load league data.</div>';
+    return;
+  }
+
+  powerContent.innerHTML = '<div class="muted-text">Calculating power rankings...</div>';
+
+  try {
+    const powerRows = await computePowerRankingsForLeague(activeLeagueId);
+
+    if (!powerRows || !powerRows.length) {
+      powerContent.innerHTML = '<div class="muted-text">Not enough data to compute power rankings.</div>';
+      return;
+    }
+
+    const prevKey = `fantasy_power_prev_${activeLeagueId}`;
+    let prevMap = new Map();
+    try {
+      const prevJson = localStorage.getItem(prevKey);
+      if (prevJson) {
+        const prevArr = JSON.parse(prevJson);
+        if (Array.isArray(prevArr)) {
+          prevArr.forEach(p => {
+            if (p && p.roster_id != null && p.rank != null) {
+              prevMap.set(p.roster_id, p.rank);
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading previous power ranks', e);
+    }
+
+    powerRows.sort((a, b) => a.powerScore - b.powerScore);
+    powerRows.forEach((row, idx) => {
+      row.rank = idx + 1;
+    });
+
+    powerRows.forEach(row => {
+      const prevRank = prevMap.get(row.roster_id);
+      if (Number.isFinite(prevRank)) {
+        row.change = prevRank - row.rank;
+      } else {
+        row.change = null;
+      }
+    });
+
+    try {
+      const toStore = powerRows.map(r => ({ roster_id: r.roster_id, rank: r.rank }));
+      localStorage.setItem(prevKey, JSON.stringify(toStore));
+    } catch (e) {
+      console.warn('Error storing power ranks', e);
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'table-section';
+
+    const table = document.createElement('table');
+    table.className = 'table power-table';
+
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr>
+        <th>Rank</th>
+        <th>Team</th>
+        <th>Change</th>
+        <th>Standing</th>
+        <th>All-Play</th>
+      </tr>
+    `;
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    const numTeams = powerRows.length;
+    powerRows.forEach(row => {
+      const tr = document.createElement('tr');
+
+      const tdRank = document.createElement('td');
+      tdRank.textContent = row.rank;
+      applyPowerRankColor(tdRank, row.rank, numTeams);
+      tr.appendChild(tdRank);
+
+      const tdTeam = document.createElement('td');
+      tdTeam.textContent = row.teamName;
+      tr.appendChild(tdTeam);
+
+      const tdChange = document.createElement('td');
+      if (!Number.isFinite(row.change) || row.change === 0) {
+        tdChange.textContent = '–';
+      } else if (row.change > 0) {
+        tdChange.textContent = `▲${row.change}`;
+        tdChange.style.color = '#00D26A';
+      } else {
+        tdChange.textContent = `▼${Math.abs(row.change)}`;
+        tdChange.style.color = '#E74C3C';
+      }
+      tr.appendChild(tdChange);
+
+      const tdStanding = document.createElement('td');
+      tdStanding.textContent = row.standingRank ?? '';
+      tr.appendChild(tdStanding);
+
+      const tdAllPlay = document.createElement('td');
+      tdAllPlay.textContent = row.allPlayRank ?? '';
+      tr.appendChild(tdAllPlay);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+
+    powerContent.innerHTML = '';
+    powerContent.appendChild(wrapper);
+  } catch (e) {
+    console.error(e);
+    powerContent.innerHTML = '<div class="muted-text">Error calculating power rankings.</div>';
+  }
+}
+
+async function computePowerRankingsForLeague(leagueId) {
+  const league = leaguesMap.get(leagueId);
+  if (!league) return [];
+
+  const { rosters, users } = league;
+  if (!rosters || !rosters.length) return [];
+
+  const usersById = new Map();
+  users.forEach(u => usersById.set(u.user_id, u));
+
+  const teamInfos = rosters.map(r => {
+    const ownerUser = usersById.get(r.owner_id);
+    const displayName =
+      ownerUser?.metadata?.team_name ||
+      ownerUser?.display_name ||
+      ownerUser?.username ||
+      `Team ${r.roster_id}`;
+    return {
+      roster_id: r.roster_id,
+      owner_id: r.owner_id,
+      displayName
+    };
+  });
+
+  const rosScores = new Map();
+  rosters.forEach(r => {
+    rosScores.set(r.roster_id, calcTeamRosScore(r));
+  });
+
+  const rosRankByRoster = new Map();
+  const sortedRos = [...rosScores.entries()].sort((a, b) => a[1] - b[1]);
+  let rosRankCounter = 1;
+  sortedRos.forEach(([rid, score]) => {
+    rosRankByRoster.set(rid, rosRankCounter++);
+  });
+
+  const standingRanks = computeStandingRanks(league);
+
+  const allPlayRanks = await computeAllPlayRanks(leagueId, league);
+
+  const numTeams = rosters.length;
+  const results = [];
+
+  teamInfos.forEach(info => {
+    const rid = info.roster_id;
+    const rosRank = rosRankByRoster.get(rid) ?? numTeams;
+    const standingRank = standingRanks.get(rid) ?? numTeams;
+    const allPlayRank = allPlayRanks.get(rid) ?? Math.ceil(numTeams / 2);
+
+    const powerScore = 0.4 * rosRank + 0.3 * standingRank + 0.3 * allPlayRank;
+
+    results.push({
+      roster_id: rid,
+      teamName: info.displayName,
+      rosRank,
+      standingRank,
+      allPlayRank,
+      powerScore
+    });
+  });
+
+  return results;
+}
+
+function calcTeamRosScore(roster) {
+  const allIds = new Set([
+    ...(roster.players || []),
+    ...(roster.taxi || []),
+    ...(roster.reserve || [])
+  ]);
+
+  const ranks = [];
+  allIds.forEach(pid => {
+    const p = playersById[pid];
+    if (!p) return;
+    const name = p.full_name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim();
+    if (!name) return;
+    const row = rosByName.get(name.toLowerCase());
+    if (row && Number.isFinite(row.rank)) {
+      ranks.push(row.rank);
+    }
+  });
+
+  if (!ranks.length) return Infinity;
+
+  ranks.sort((a, b) => a - b);
+  const limit = Math.min(8, ranks.length);
+  const slice = ranks.slice(0, limit);
+  const avg = slice.reduce((sum, x) => sum + x, 0) / limit;
+  return avg;
+}
+
+function computeStandingRanks(league) {
+  const { rosters } = league;
+  const arr = rosters.map(r => {
+    const s = r.settings || {};
+    const wins = Number(s.wins ?? 0);
+    const losses = Number(s.losses ?? 0);
+    const ties = Number(s.ties ?? 0);
+    const fpts = Number(s.fpts ?? 0);
+    const fptsDec = Number(s.fpts_decimal ?? 0);
+    const points = fpts + fptsDec / 100;
+    return {
+      roster_id: r.roster_id,
+      wins,
+      losses,
+      ties,
+      points
+    };
+  });
+
+  arr.sort((a, b) => {
+    if (a.wins !== b.wins) return b.wins - a.wins;
+    if (a.points !== b.points) return b.points - a.points;
+    return a.roster_id - b.roster_id;
+  });
+
+  const map = new Map();
+  arr.forEach((entry, idx) => {
+    map.set(entry.roster_id, idx + 1);
+  });
+  return map;
+}
+
+async function computeAllPlayRanks(leagueId, league) {
+  const { rosters } = league;
+  const rosterIds = rosters.map(r => r.roster_id);
+
+  const ranksPerRoster = new Map();
+  rosterIds.forEach(id => ranksPerRoster.set(id, []));
+
+  const currentWeek = Number(sleeperState?.week ?? 0);
+  if (!currentWeek) return new Map();
+
+  const weeks = [];
+  for (let w = currentWeek; w >= 1 && weeks.length < 3; w--) {
+    weeks.push(w);
+  }
+
+  for (const w of weeks) {
+    try {
+      const res = await fetch(`https://api.sleeper.app/v1/league/${leagueId}/matchups/${w}`);
+      const matchups = await res.json();
+      if (!Array.isArray(matchups) || !matchups.length) continue;
+
+      const pointsByRoster = new Map();
+      matchups.forEach(m => {
+        if (m.roster_id != null) {
+          pointsByRoster.set(m.roster_id, Number(m.points ?? 0));
+        }
+      });
+
+      const weekArr = rosterIds.map(rid => ({
+        roster_id: rid,
+        points: pointsByRoster.has(rid) ? pointsByRoster.get(rid) : 0
+      }));
+
+      weekArr.sort((a, b) => b.points - a.points);
+      weekArr.forEach((entry, idx) => {
+        const list = ranksPerRoster.get(entry.roster_id);
+        if (list) list.push(idx + 1);
+      });
+    } catch (e) {
+      console.warn('Error fetching matchups for week', w, e);
+    }
+  }
+
+  const avgPosByRoster = new Map();
+  rosterIds.forEach(rid => {
+    const list = ranksPerRoster.get(rid) || [];
+    if (!list.length) {
+      avgPosByRoster.set(rid, rosterIds.length / 2);
+    } else {
+      const avg = list.reduce((s, v) => s + v, 0) / list.length;
+      avgPosByRoster.set(rid, avg);
+    }
+  });
+
+  const sorted = [...avgPosByRoster.entries()].sort((a, b) => a[1] - b[1]);
+  const rankByRoster = new Map();
+  sorted.forEach(([rid], idx) => {
+    rankByRoster.set(rid, idx + 1);
+  });
+
+  return rankByRoster;
 }
 
 // OWNERSHIP CONTEXT
@@ -1295,7 +1618,7 @@ function setCellColor(td, color) {
   td.style.color = '#ffffff';
 }
 
-// Overall rank gradient: 1 green, 55 yellow, 125 red
+// Overall rank gradient: best (1) green -> mid yellow -> worst red
 function applyOverallRankColor(td, rank) {
   if (!Number.isFinite(rank) || rank === 0) return;
 
@@ -1306,13 +1629,39 @@ function applyOverallRankColor(td, rank) {
     color = 'hsl(0, 70%, 50%)';
   } else if (rank <= 55) {
     const t = (rank - 1) / (55 - 1);
-    const hue = 120 - (120 - 60) * t; // 120 -> 60
+    const hue = 120 - (120 - 60) * t;
     color = `hsl(${hue}, 70%, 45%)`;
   } else {
     const t = (rank - 55) / (125 - 55);
-    const hue = 60 - 60 * t; // 60 -> 0
+    const hue = 60 - 60 * t;
     color = `hsl(${hue}, 70%, 45%)`;
   }
+  setCellColor(td, color);
+}
+
+// Power rank gradient for teams: 1..N
+function applyPowerRankColor(td, rank, totalTeams) {
+  if (!Number.isFinite(rank) || !Number.isFinite(totalTeams) || totalTeams <= 1) return;
+
+  const minRank = 1;
+  const maxRank = totalTeams;
+  const midRank = (minRank + maxRank) / 2;
+
+  let color;
+  if (rank === minRank) {
+    color = 'hsl(120, 70%, 40%)';
+  } else if (rank === maxRank) {
+    color = 'hsl(0, 70%, 50%)';
+  } else if (rank <= midRank) {
+    const t = (rank - minRank) / (midRank - minRank || 1);
+    const hue = 120 - (120 - 50) * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  } else {
+    const t = (rank - midRank) / (maxRank - midRank || 1);
+    const hue = 50 - 50 * t;
+    color = `hsl(${hue}, 70%, 45%)`;
+  }
+
   setCellColor(td, color);
 }
 
@@ -1365,12 +1714,12 @@ function applyProjectionColor(td, value, summary) {
     color = 'hsl(50, 100%, 60%)';
   } else if (value > median) {
     const t = (value - median) / (max - median || 1);
-    const hue = 80 + (120 - 80) * t; // move toward deep green
-    const lightness = 75 - 25 * t;   // slightly darker as higher
+    const hue = 80 + (120 - 80) * t;
+    const lightness = 75 - 25 * t;
     color = `hsl(${hue}, 70%, ${lightness}%)`;
   } else {
     const t = (median - value) / (median - min || 1);
-    const hue = 50 - 50 * t;   // 50 (yellow) -> 0 (red)
+    const hue = 50 - 50 * t;
     const lightness = 75 - 25 * t;
     color = `hsl(${hue}, 70%, ${lightness}%)`;
   }
